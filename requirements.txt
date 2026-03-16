@@ -1,0 +1,21 @@
+# Lyric model: local LLM + QLoRA fine-tuning
+# Python 3.10+ recommended
+
+# Core
+torch>=2.1.0
+transformers>=4.40.0
+accelerate>=0.27.0
+peft>=0.10.0,<0.16
+bitsandbytes>=0.43.0
+
+# Data & training
+datasets>=2.18.0
+trl>=0.8.0
+scipy
+
+# Tokenization
+sentencepiece
+protobuf
+
+# Optional: faster training on Windows/CUDA
+# pip install flash-attn --no-build-isolation  # if you have CUDA and want 2x speed

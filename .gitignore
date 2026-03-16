@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Environment and secrets
+.env
+.env.local
+*.pem
+
+# Model weights and checkpoints (large binaries)
+checkpoints/
+adapters/
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+
+# Processed data (large; regenerate with prepare_lyrics.py)
+data/processed/*.jsonl
+data/processed/*.json
+
+# Raw lyrics content (user data; keep folder via .gitkeep)
+data/raw_lyrics/*.txt
+data/raw_lyrics/*.jsonl
+!data/raw_lyrics/.gitkeep
+
+# Logs and experiments
+wandb/
+*.log
+runs/
+outputs/
+
+# IDE and OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Hugging Face cache (optional; uncomment if you don't want to track cache path)
+# .cache/
+# huggingface/
