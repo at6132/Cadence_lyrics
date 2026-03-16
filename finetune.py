@@ -1,6 +1,7 @@
 """
-QLoRA fine-tuning on human lyrics. Fits in ~8GB VRAM for 7B model.
-Run: python download_model.py && python prepare_lyrics.py && python finetune.py
+QLoRA fine-tuning on human lyrics.
+Local: 7B model on 12GB GPU.
+Server: Llama 3.3 70B on 4× A100 80GB (data parallel, ~41GB/GPU).
 """
 import os
 from pathlib import Path
@@ -31,11 +32,13 @@ from config import (
     PROCESSED_DIR,
     ADAPTER_NAME,
     ADAPTERS_DIR,
+    IS_4XA100,
+    MAX_STEPS,
+    USE_FLASH_ATTN_2,
 )
 
 HF_TOKEN = os.getenv("HUGGING_FACE_HUB_TOKEN")
 
-# Quick test: ~10 min local run to confirm pipeline before moving to 4xA100
 QUICK_MAX_SAMPLES = 500
 QUICK_MAX_STEPS = 50
 
@@ -44,7 +47,7 @@ def main(quick: bool = False):
     train_path = PROCESSED_DIR / "train.jsonl"
     if not train_path.exists():
         raise SystemExit(
-            "No train.jsonl. Run: python prepare_lyrics.py (and add lyrics to data/raw_lyrics/ or use --download-hf)"
+            "No train.jsonl found. Run prepare_lyrics.py first."
         )
 
     import torch
@@ -58,7 +61,7 @@ def main(quick: bool = False):
     if quick:
         output_dir = str(CHECKPOINTS_DIR / "lyric-lora-quick")
         adapter_name = "lyric-human-quick"
-        print("Quick run: max %d samples, max %d steps (~10 min)" % (QUICK_MAX_SAMPLES, QUICK_MAX_STEPS))
+        print("Quick test: %d samples, %d steps" % (QUICK_MAX_SAMPLES, QUICK_MAX_STEPS))
 
     compute_dtype = getattr(torch, BNB_4BIT_COMPUTE_DTYPE)
     bnb_config = BitsAndBytesConfig(
@@ -68,20 +71,40 @@ def main(quick: bool = False):
         bnb_4bit_use_double_quant=True,
     ) if USE_4BIT else None
 
-    print("Loading tokenizer and model...")
+    # Attention implementation
+    attn_impl = "sdpa"
+    if USE_FLASH_ATTN_2:
+        try:
+            import flash_attn  # noqa: F401
+            attn_impl = "flash_attention_2"
+            print("Using Flash Attention 2")
+        except ImportError:
+            print("flash-attn not installed, falling back to SDPA")
+
+    # Device map: per-rank GPU in multi-GPU, auto otherwise
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    if IS_4XA100:
+        device_map = {"": local_rank}
+    else:
+        device_map = "auto"
+
+    print("Loading %s ..." % MODEL_ID)
     tokenizer = AutoTokenizer.from_pretrained(
         MODEL_ID,
         token=HF_TOKEN,
         trust_remote_code=True,
     )
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
         quantization_config=bnb_config,
-        device_map="auto",
+        device_map=device_map,
         token=HF_TOKEN,
         trust_remote_code=True,
         torch_dtype=compute_dtype if USE_4BIT else torch.bfloat16,
-        attn_implementation="sdpa",
+        attn_implementation=attn_impl,
     )
     if USE_4BIT:
         model = prepare_model_for_kbit_training(model)
@@ -101,12 +124,16 @@ def main(quick: bool = False):
     if quick:
         n = min(QUICK_MAX_SAMPLES, len(dataset))
         dataset = dataset.shuffle(seed=42).select(range(n))
-        print("Using %d samples for quick run" % len(dataset))
+        print("Using %d samples" % len(dataset))
+
+    max_steps = QUICK_MAX_STEPS if quick else (MAX_STEPS if IS_4XA100 and MAX_STEPS > 0 else -1)
+    if IS_4XA100 and not quick:
+        print("4×A100 80GB mode: %s, max_steps=%d (≤5h cap)" % (MODEL_ID, max_steps))
 
     training_args = SFTConfig(
         output_dir=output_dir,
         num_train_epochs=1 if quick else NUM_EPOCHS,
-        max_steps=QUICK_MAX_STEPS if quick else -1,
+        max_steps=max_steps,
         per_device_train_batch_size=PER_DEVICE_TRAIN_BATCH_SIZE,
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
         learning_rate=LEARNING_RATE,
@@ -120,6 +147,9 @@ def main(quick: bool = False):
         gradient_checkpointing=GRADIENT_CHECKPOINTING,
         optim="adamw_torch",
         report_to="none",
+        ddp_find_unused_parameters=False,
+        dataloader_num_workers=4 if IS_4XA100 else 0,
+        dataloader_pin_memory=True,
     )
 
     trainer = SFTTrainer(
@@ -129,26 +159,28 @@ def main(quick: bool = False):
         tokenizer=tokenizer,
         dataset_text_field="messages",
         max_seq_length=MAX_SEQ_LENGTH,
-        dataset_num_proc=2,
+        dataset_num_proc=4 if IS_4XA100 else 2,
         packing=False,
     )
 
     print("Starting training...")
     trainer.train()
-    trainer.save_model(output_dir)
-    tokenizer.save_pretrained(output_dir)
 
-    # Save adapter only for inference
-    adapter_path = ADAPTERS_DIR / adapter_name
-    adapter_path.mkdir(parents=True, exist_ok=True)
-    model.save_pretrained(str(adapter_path))
-    tokenizer.save_pretrained(str(adapter_path))
-    print("Adapter saved to", adapter_path)
+    if local_rank == 0:
+        trainer.save_model(output_dir)
+        tokenizer.save_pretrained(output_dir)
+        adapter_path = ADAPTERS_DIR / adapter_name
+        adapter_path.mkdir(parents=True, exist_ok=True)
+        model.save_pretrained(str(adapter_path))
+        tokenizer.save_pretrained(str(adapter_path))
+        print("Adapter saved to", adapter_path)
+    if IS_4XA100 and torch.distributed.is_initialized():
+        torch.distributed.barrier()
 
 
 if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser()
-    p.add_argument("--quick", action="store_true", help="Quick local test: 500 samples, 50 steps, ~10 min. Use before full run on 4xA100.")
+    p.add_argument("--quick", action="store_true", help="Quick local test: 500 samples, 50 steps")
     args = p.parse_args()
     main(quick=args.quick)

@@ -1,4 +1,4 @@
-# Lyric model: local LLM + QLoRA fine-tuning
+# Lyric model: QLoRA fine-tuning
 # Python 3.10+ recommended
 
 # Core
@@ -17,5 +17,5 @@ scipy
 sentencepiece
 protobuf
 
-# Optional: faster training on Windows/CUDA
-# pip install flash-attn --no-build-isolation  # if you have CUDA and want 2x speed
+# 4xA100 server: Flash Attention 2 (2x faster for 70B)
+# pip install flash-attn --no-build-isolation

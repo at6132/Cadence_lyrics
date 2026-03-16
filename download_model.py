@@ -1,20 +1,26 @@
 """
-Download the base model from Hugging Face (biggest that fits your VRAM).
-Uses HF cache; run once before fine-tuning.
+Download the base model from Hugging Face (cached for subsequent runs).
+For Llama 3.3 70B: accept the license first at
+  https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct
+Then set HUGGING_FACE_HUB_TOKEN=hf_xxxxx
 """
 import os
 from pathlib import Path
 
 from config import MODEL_ID, ROOT
 
-# Optional: set HF token if using gated models (e.g. Llama)
-# export HUGGING_FACE_HUB_TOKEN=your_token
 HF_TOKEN = os.getenv("HUGGING_FACE_HUB_TOKEN")
 
 
 def main():
-    print(f"Downloading base model: {MODEL_ID}")
-    print("This may take a while (several GB). Model is cached in HF cache.")
+    if "llama" in MODEL_ID.lower() and not HF_TOKEN:
+        print("WARNING: Llama models are gated. Set HUGGING_FACE_HUB_TOKEN first.")
+        print("  1. Go to https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct")
+        print("  2. Accept the license")
+        print("  3. Create a token at https://huggingface.co/settings/tokens")
+        print("  4. export HUGGING_FACE_HUB_TOKEN=hf_xxxxx")
+
+    print(f"Downloading: {MODEL_ID}")
     try:
         from transformers import AutoModelForCausalLM, AutoTokenizer
     except ImportError:
@@ -26,9 +32,8 @@ def main():
         trust_remote_code=True,
     )
     tokenizer.save_pretrained(ROOT / "tokenizer_cache")
-    print("Tokenizer saved to tokenizer_cache/")
+    print("Tokenizer cached.")
 
-    # Download full model to cache (used later by training script)
     _ = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
         token=HF_TOKEN,
@@ -36,7 +41,7 @@ def main():
         torch_dtype="auto",
         low_cpu_mem_usage=True,
     )
-    print("Model weights cached. You can run finetune.py next.")
+    print("Model weights cached. Ready to fine-tune.")
 
 
 if __name__ == "__main__":

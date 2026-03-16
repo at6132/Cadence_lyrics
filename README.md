@@ -1,122 +1,132 @@
 # Cadence Lyrics – Lyric model for Cadence AI
 
-This repo is the **lyric-generation component** for [Cadence AI](https://github.com/at6132/Cadence_lyrics): a local LLM fine-tuned on human lyrics so it writes authentic, human-sounding song lyrics instead of generic AI phrasing. Use it alongside the main Cadence pipeline (LLM-generated MIDI, web app, and full-song scripts).
+Fine-tuned LLM for authentic, human-sounding song lyrics. Trained on 3.17M real songs from Genius across 15 genres.
 
-**In the rest of the Cadence project:** The main repo focuses on **full-song MIDI** generation (e.g. `midi_llm_gen/`, web app, pretty_midi scripts). This **Cadence_lyrics** repo is a separate, dedicated lyric model you can train and run locally to generate or refine lyrics for use with Cadence AI.
+**Two modes:**
+- **Local** (RTX 5070 12GB): Qwen2.5-7B-Instruct with QLoRA
+- **Server** (4× A100 80GB): **Llama 3.3 70B** with QLoRA — best open model for creative writing
 
-**Your setup:** RTX 5070 (12GB VRAM) → default is **Qwen2.5-7B-Instruct** with 4-bit QLoRA (~6–8GB). You can try a 14B model by setting `LYRIC_MODEL_ID` (see below) and using `batch_size=1`.
-
-## Quick start
+## Quick start (local)
 
 ```bash
-cd Lyric_model   # or clone Cadence_lyrics and cd into it
+cd Lyric_model
 pip install -r requirements.txt
+python finetune.py --quick          # sanity check (~10 min)
+python generate.py "Write a verse about rain"
 ```
 
-### 1. Download the base model (one-time)
+## Full pipeline
+
+### 1. Download the base model
 
 ```bash
 python download_model.py
 ```
 
-This caches the model from Hugging Face (several GB). For gated models (e.g. Llama), set:
+For **Llama 3.3** (gated model — server mode):
+1. Accept the license at https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct
+2. Set your token: `export HUGGING_FACE_HUB_TOKEN=hf_xxxxx`
 
+### 2. Prepare lyrics data
+
+**Full dataset (3.17M songs, recommended for server):**
 ```bash
-set HUGGING_FACE_HUB_TOKEN=your_token
+python prepare_lyrics.py --download-hf --full
 ```
 
-### 2. Add human lyrics
-
-Lyrics come from **theelderemo/genius-lyrics-cleaned** on Hugging Face: 3.17M human-cleaned songs with **15 genres** (rap, trap, pop, r&b, rock, country, metal, folk, jazz, indie, electronic, reggae, soul, blues, latin). The download step samples **at least 10,000 songs** stratified across all genres.
-
-- **Option A – Download 10k+ songs (many genres)**  
-  Default: 10,000 songs, balanced across genres.
-
+**Smaller sample (10k+ songs, good for local):**
 ```bash
 python prepare_lyrics.py --download-hf
 python prepare_lyrics.py
 ```
 
-  More songs (e.g. 25k) or cap per genre:
+**Your own lyrics:** Drop `.txt` or `.jsonl` files in `data/raw_lyrics/`, then run `python prepare_lyrics.py`.
 
-```bash
-python prepare_lyrics.py --download-hf --min-songs 25000
-python prepare_lyrics.py --download-hf --min-songs 15000 --max-per-genre 1500
-```
+### 3. Fine-tune
 
-- **Use the whole dataset (3.17M songs)**  
-  Stream everything into one `train.jsonl` (no per-song files; one big file, a few GB):
-
-```bash
-python prepare_lyrics.py --download-hf --full
-```
-
-  Then run `finetune.py` as usual. Training will take longer but see all genres and styles.
-
-- **Option B – Your own lyrics**  
-  Put `.txt` or `.jsonl` files in `data/raw_lyrics/`. They’re merged with whatever you downloaded.
-
-- **Option C – Both**  
-  Run `--download-hf` first, add your own files in `data/raw_lyrics/`, then run `prepare_lyrics.py` (no `--download-hf`) to build `data/processed/train.jsonl`.
-
-### 3. Fine-tune (QLoRA)
-
+**Local (single GPU):**
 ```bash
 python finetune.py
 ```
 
-Training uses 4-bit QLoRA so it fits in ~8GB VRAM. Checkpoints go to `checkpoints/lyric-lora/`, and the final adapter is saved under `adapters/lyric-human/`.
+**4× A100 80GB server (Llama 3.3 70B, ≤5h):**
+```bash
+export LYRIC_DEVICE=4xa100
+export HUGGING_FACE_HUB_TOKEN=hf_xxxxx
+./run_4xa100.sh
+```
 
-### 4. Generate lyrics (for use with Cadence AI)
+### 4. Generate lyrics
 
 ```bash
-python generate.py "Write a verse and chorus about rain"
+python generate.py "Write a verse and chorus about heartbreak"
 python generate.py "Write a bridge in a sad, sparse style" --max-tokens 300
 ```
 
-Use the output in the main Cadence workflow (e.g. as song descriptions, vocal ideas, or to drive MIDI generation).
-
 ---
 
-## Pushing 12GB: bigger models
+## 4× A100 80GB server setup
 
-In the project root `.env` (or in the shell), set:
+### Why Llama 3.3 70B?
 
-```env
-LYRIC_MODEL_ID=Qwen/Qwen2.5-14B-Instruct
+After researching all major open models for creative writing:
+
+| Model | Creative quality | Issue |
+|-------|-----------------|-------|
+| Qwen2.5 7B–14B | Decent | Sounds formal, fights creative tone |
+| Mistral Nemo 12B | Good | Smaller, less nuance than 70B |
+| **Llama 3.3 70B** | **Best** | Best instruction-following, proven lyric/poetry fine-tunes, massive creative capacity |
+
+Llama 3.3 70B matches Llama 3.1 405B on many tasks. With QLoRA 4-bit it uses ~41GB per GPU — fits on A100 80GB with room for batch.
+
+### Server configuration
+
+`LYRIC_DEVICE=4xa100` activates:
+- **Model:** `meta-llama/Llama-3.3-70B-Instruct`
+- **QLoRA 4-bit** on all linear layers, rank 32
+- **Batch:** 4 per GPU × 4 GPUs × 4 grad accum = **64 global batch**
+- **Gradient checkpointing** ON (needed for 70B + batch to fit 80GB)
+- **Flash Attention 2** when available
+- **max_steps = 7200** (~5 hour cap at ~2.5 sec/step)
+- **1 epoch**, bf16, AdamW
+
+### Running on the server
+
+```bash
+# 1. Install
+pip install -r requirements.txt
+pip install flash-attn --no-build-isolation   # 2x faster attention
+
+# 2. Set env
+export LYRIC_DEVICE=4xa100
+export HUGGING_FACE_HUB_TOKEN=hf_xxxxx
+
+# 3. Copy train.jsonl or build it on the server
+python prepare_lyrics.py --download-hf --full
+
+# 4. Launch (uses accelerate for 4-GPU data parallel)
+./run_4xa100.sh
 ```
 
-Then in `config.py` set `PER_DEVICE_TRAIN_BATCH_SIZE = 1` and keep `GRADIENT_CHECKPOINTING = True`. Training will be slower but the model will be larger.
-
-Other options:
-
-- `meta-llama/Llama-3.2-3B-Instruct` – smaller, faster, less VRAM
-- `mistralai/Mistral-7B-Instruct-v0.3` – 7B alternative to Qwen
+Adapter is saved to `adapters/lyric-human/` (rank 0 only).
 
 ---
 
 ## Layout
 
 ```
-Lyric_model/           # This repo (Cadence_lyrics)
-  config.py            # Model id, paths, LoRA & training settings
-  download_model.py    # Download base model from HF
-  prepare_lyrics.py    # raw_lyrics → train.jsonl (or --download-hf)
-  finetune.py          # QLoRA fine-tune
-  generate.py          # Inference with adapter (for Cadence AI)
+Lyric_model/
+  config.py              # Model, LoRA, training settings (local vs 4xA100)
+  configs/
+    accelerate_4xa100.yaml  # Accelerate config for 4 GPUs
+  run_4xa100.sh          # Launch script for server
+  download_model.py      # Download base model from HF
+  prepare_lyrics.py      # Build train.jsonl from HF dataset or local files
+  finetune.py            # QLoRA fine-tune (single or multi-GPU)
+  generate.py            # Inference with adapter
   data/
-    raw_lyrics/        # Your .txt / .jsonl lyrics
-    processed/         # train.jsonl
-  checkpoints/         # Training checkpoints
-  adapters/            # Final LoRA adapter (lyric-human/)
+    raw_lyrics/          # Your .txt / .jsonl lyrics
+    processed/           # train.jsonl (4M+ examples from 3.17M songs)
+  checkpoints/           # Training checkpoints
+  adapters/              # Final LoRA adapter (lyric-human/)
 ```
-
----
-
-## How this fits with Cadence AI
-
-- **Cadence AI** = LLM-generated full-song MIDI (pretty_midi scripts), web app, and “build around a vocal” / “complete my track” features. The main repo has `midi_llm_gen/`, `app/`, and generation from natural-language song descriptions.
-- **Cadence Lyrics (this repo)** = A dedicated lyric model you train on human lyrics and run locally. It produces verse/chorus/bridge text you can feed into Cadence as prompts, vocal ideas, or song descriptions.
-- **QLoRA** keeps the base model in 4-bit and only trains a small LoRA adapter, so a 7B model fits on 12GB and still learns your data.
-- **Human lyrics** in the training set teach the model real phrasing, structure, and tone instead of generic “AI verse” patterns.
-- **Instruct format** (system + user + assistant) lets you steer generation with prompts while the model stays in a “songwriter” style.
