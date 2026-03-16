@@ -191,6 +191,11 @@ def main(quick: bool = False):
         training_kwargs["eval_strategy"] = "steps"
         training_kwargs["eval_steps"] = EVAL_STEPS
         training_kwargs["load_best_model_at_end"] = False
+    # SFT-specific args: in SFTConfig for TRL 0.16+ (server), else passed to SFTTrainer
+    training_kwargs["dataset_text_field"] = "messages"
+    training_kwargs["max_seq_length"] = MAX_SEQ_LENGTH
+    training_kwargs["dataset_num_proc"] = 4 if IS_4XA100 else 2
+    training_kwargs["packing"] = False
     training_args = SFTConfig(**training_kwargs)
 
     trainer = SFTTrainer(
@@ -199,10 +204,6 @@ def main(quick: bool = False):
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
-        dataset_text_field="messages",
-        max_seq_length=MAX_SEQ_LENGTH,
-        dataset_num_proc=4 if IS_4XA100 else 2,
-        packing=False,
         callbacks=callbacks,
     )
 
