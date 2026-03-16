@@ -41,6 +41,8 @@ HF_TOKEN = os.getenv("HUGGING_FACE_HUB_TOKEN")
 
 QUICK_MAX_SAMPLES = 500
 QUICK_MAX_STEPS = 50
+# Use 3B for quick test so it fits on 12GB without OOM during load; full run uses config MODEL_ID
+QUICK_MODEL_ID = "Qwen/Qwen2.5-3B-Instruct"
 
 
 def main(quick: bool = False):
@@ -97,15 +99,19 @@ def main(quick: bool = False):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_ID,
-        quantization_config=bnb_config,
-        device_map=device_map,
-        token=HF_TOKEN,
-        trust_remote_code=True,
-        torch_dtype=compute_dtype if USE_4BIT else torch.bfloat16,
-        attn_implementation=attn_impl,
-    )
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            MODEL_ID,
+            quantization_config=bnb_config,
+            device_map=device_map,
+            token=HF_TOKEN,
+            trust_remote_code=True,
+            torch_dtype=compute_dtype if USE_4BIT else torch.bfloat16,
+            attn_implementation=attn_impl,
+        )
+    except Exception as e:
+        print("Model load failed: %s" % e)
+        raise
     if USE_4BIT:
         model = prepare_model_for_kbit_training(model)
 
