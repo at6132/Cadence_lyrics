@@ -170,7 +170,6 @@ def main(quick: bool = False):
         per_device_train_batch_size=PER_DEVICE_TRAIN_BATCH_SIZE,
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
         learning_rate=LEARNING_RATE,
-        max_seq_length=MAX_SEQ_LENGTH,
         warmup_ratio=WARMUP_RATIO,
         max_grad_norm=MAX_GRAD_NORM,
         weight_decay=WEIGHT_DECAY,
