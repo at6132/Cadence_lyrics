@@ -191,6 +191,8 @@ def main(quick: bool = False):
         training_kwargs["eval_strategy"] = "steps"
         training_kwargs["eval_steps"] = EVAL_STEPS
         training_kwargs["load_best_model_at_end"] = False
+        training_kwargs["metric_for_best_model"] = "eval_loss"
+        training_kwargs["greater_is_better"] = False
 
     # Build SFTConfig with only base training args (server TRL rejects SFT-specific params in __init__)
     training_args = SFTConfig(**training_kwargs)
