@@ -93,9 +93,11 @@ Llama 3.3 70B matches Llama 3.1 405B on many tasks. With QLoRA 4-bit it uses ~41
 ### Running on the server
 
 ```bash
-# 1. Install
+# 1. Install (PyTorch 2.5+ required for 4-bit load)
 pip install -r requirements.txt
-pip install flash-attn --no-build-isolation   # 2x faster attention
+# If container has old PyTorch: upgrade torch + torchvision + torchaudio together (else: operator torchvision::nms does not exist)
+pip install -U torch torchvision torchaudio transformers bitsandbytes accelerate
+pip install flash-attn --no-build-isolation   # optional: 2x faster attention
 
 # 2. Set env
 export LYRIC_DEVICE=4xa100

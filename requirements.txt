@@ -1,8 +1,8 @@
 # Lyric model: QLoRA fine-tuning
 # Python 3.10+ recommended
 
-# Core
-torch>=2.1.0
+# Core (torch 2.5+ required for 4-bit load: set_submodule)
+torch>=2.5.0
 transformers>=4.40.0
 accelerate>=0.27.0
 peft>=0.10.0,<0.16
@@ -10,7 +10,7 @@ bitsandbytes>=0.43.0
 
 # Data & training
 datasets>=2.18.0
-trl>=0.8.0
+trl>=0.12.0
 scipy
 
 # Tokenization
