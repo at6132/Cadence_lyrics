@@ -41,9 +41,9 @@ if IS_4XA100:
     PER_DEVICE_TRAIN_BATCH_SIZE = 4
     GRADIENT_ACCUMULATION_STEPS = 4
     NUM_EPOCHS = 1
-    # 5-hour cap: ~2.5 sec/step for 70B QLoRA → ~7200 steps in 5h
+    # 5-hour budget ($6/h): default steps stay under 5h at ~30 s/step (no flash-attn). With flash-attn set LYRIC_MAX_STEPS=7200.
     MAX_TRAIN_HOURS = 5.0
-    MAX_STEPS = 7200
+    MAX_STEPS = int(os.getenv("LYRIC_MAX_STEPS", "600"))   # 600 × 30s ≈ 5h; with flash-attn use LYRIC_MAX_STEPS=7200
     SAVE_STRATEGY = "steps"
     SAVE_STEPS = 500
     LOGGING_STEPS = 10

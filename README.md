@@ -97,7 +97,7 @@ Llama 3.3 70B matches Llama 3.1 405B on many tasks. With QLoRA 4-bit it uses ~41
 pip install -r requirements.txt
 # If container has old PyTorch: upgrade torch + torchvision + torchaudio together (else: operator torchvision::nms does not exist)
 pip install -U torch torchvision torchaudio transformers bitsandbytes accelerate
-pip install flash-attn --no-build-isolation   # optional: 2x faster attention
+pip install flash-attn --no-build-isolation   # strongly recommended: ~2–3x faster; without it 7200 steps can take 50+ hours
 
 # 2. Set env
 export LYRIC_DEVICE=4xa100
