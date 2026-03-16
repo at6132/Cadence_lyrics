@@ -90,3 +90,14 @@ MAX_SEQ_LENGTH = 1024
 FP16 = False
 BF16 = True
 ADAPTER_NAME = "lyric-human"
+
+# Early stopping: stop if eval loss doesn't improve for N evaluations (saves $ when loss plateaus)
+EARLY_STOPPING_PATIENCE = 3
+EVAL_STEPS = 500
+EVAL_FRACTION = 0.02  # use 2% of data for eval
+
+# Optimizer / gradients (shared)
+MAX_GRAD_NORM = 1.0  # gradient clipping; prevents explosion
+WEIGHT_DECAY = 0.01  # L2 regularization
+LR_SCHEDULER_TYPE = "cosine"  # decay LR smoothly to 0
+SEED = 42  # reproducibility

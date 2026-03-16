@@ -1,7 +1,9 @@
 """
 Generate lyrics with the fine-tuned model (base + LoRA adapter).
-Works with both Llama 3.3 70B (server) and Qwen 7B (local).
+Uses the base model ID saved with the adapter so it works after copying
+adapters/ from server (Llama 70B) to local without changing config.
 """
+import json
 import os
 import sys
 from pathlib import Path
@@ -14,6 +16,21 @@ HF_TOKEN = os.getenv("HUGGING_FACE_HUB_TOKEN")
 
 _model = None
 _tokenizer = None
+
+
+def _get_base_model_id(adapter_path: Path) -> str:
+    """Use base model from adapter config so generate works with any trained adapter."""
+    config_path = adapter_path / "adapter_config.json"
+    if config_path.exists():
+        try:
+            with open(config_path, encoding="utf-8") as f:
+                cfg = json.load(f)
+            base = cfg.get("base_model_name_or_path")
+            if base:
+                return base
+        except (json.JSONDecodeError, KeyError):
+            pass
+    return MODEL_ID
 
 
 def load_model_and_tokenizer():
@@ -31,6 +48,7 @@ def load_model_and_tokenizer():
             f"Adapter not found at {adapter_path}. Run finetune.py first."
         )
 
+    base_model_id = _get_base_model_id(adapter_path)
     _tokenizer = AutoTokenizer.from_pretrained(
         str(adapter_path),
         trust_remote_code=True,
@@ -46,7 +64,7 @@ def load_model_and_tokenizer():
     )
 
     _model = AutoModelForCausalLM.from_pretrained(
-        MODEL_ID,
+        base_model_id,
         quantization_config=bnb_config,
         device_map="auto",
         token=HF_TOKEN,

@@ -35,6 +35,13 @@ from config import (
     IS_4XA100,
     MAX_STEPS,
     USE_FLASH_ATTN_2,
+    EARLY_STOPPING_PATIENCE,
+    EVAL_STEPS,
+    EVAL_FRACTION,
+    MAX_GRAD_NORM,
+    WEIGHT_DECAY,
+    LR_SCHEDULER_TYPE,
+    SEED,
 )
 
 HF_TOKEN = os.getenv("HUGGING_FACE_HUB_TOKEN")
@@ -130,13 +137,32 @@ def main(quick: bool = False):
     if quick:
         n = min(QUICK_MAX_SAMPLES, len(dataset))
         dataset = dataset.shuffle(seed=42).select(range(n))
+        train_dataset = dataset
+        eval_dataset = None
         print("Using %d samples" % len(dataset))
+    else:
+        split = dataset.train_test_split(test_size=EVAL_FRACTION, seed=SEED)
+        train_dataset = split["train"]
+        eval_dataset = split["test"]
+        if len(eval_dataset) < 10:
+            eval_dataset = None  # too small to be useful
+        if eval_dataset is not None:
+            print("Train: %d, eval: %d (early stop if eval loss plateaus %d evals)" % (
+                len(train_dataset), len(eval_dataset), EARLY_STOPPING_PATIENCE,
+            ))
+        else:
+            print("Train: %d (no eval set; early stopping disabled)" % len(train_dataset))
 
     max_steps = QUICK_MAX_STEPS if quick else (MAX_STEPS if IS_4XA100 and MAX_STEPS > 0 else -1)
     if IS_4XA100 and not quick:
         print("4×A100 80GB mode: %s, max_steps=%d (≤5h cap)" % (MODEL_ID, max_steps))
 
-    training_args = SFTConfig(
+    from transformers import EarlyStoppingCallback
+    callbacks = []
+    if eval_dataset is not None and EARLY_STOPPING_PATIENCE > 0:
+        callbacks.append(EarlyStoppingCallback(early_stopping_patience=EARLY_STOPPING_PATIENCE))
+
+    training_kwargs = dict(
         output_dir=output_dir,
         num_train_epochs=1 if quick else NUM_EPOCHS,
         max_steps=max_steps,
@@ -145,6 +171,10 @@ def main(quick: bool = False):
         learning_rate=LEARNING_RATE,
         max_seq_length=MAX_SEQ_LENGTH,
         warmup_ratio=WARMUP_RATIO,
+        max_grad_norm=MAX_GRAD_NORM,
+        weight_decay=WEIGHT_DECAY,
+        lr_scheduler_type=LR_SCHEDULER_TYPE,
+        seed=SEED,
         logging_steps=min(5, LOGGING_STEPS) if quick else LOGGING_STEPS,
         save_strategy="steps" if quick else SAVE_STRATEGY,
         save_steps=25 if quick else SAVE_STEPS,
@@ -157,31 +187,46 @@ def main(quick: bool = False):
         dataloader_num_workers=4 if IS_4XA100 else 0,
         dataloader_pin_memory=True,
     )
+    if eval_dataset is not None:
+        training_kwargs["eval_strategy"] = "steps"
+        training_kwargs["eval_steps"] = EVAL_STEPS
+        training_kwargs["load_best_model_at_end"] = False
+    training_args = SFTConfig(**training_kwargs)
 
     trainer = SFTTrainer(
         model=model,
         args=training_args,
-        train_dataset=dataset,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
         tokenizer=tokenizer,
         dataset_text_field="messages",
         max_seq_length=MAX_SEQ_LENGTH,
         dataset_num_proc=4 if IS_4XA100 else 2,
         packing=False,
+        callbacks=callbacks,
     )
 
-    print("Starting training...")
-    trainer.train()
+    def _save_final():
+        if local_rank == 0:
+            trainer.save_model(output_dir)
+            tokenizer.save_pretrained(output_dir)
+            adapter_path = ADAPTERS_DIR / adapter_name
+            adapter_path.mkdir(parents=True, exist_ok=True)
+            model.save_pretrained(str(adapter_path))
+            tokenizer.save_pretrained(str(adapter_path))
+            print("Adapter saved to", adapter_path)
+        if IS_4XA100 and torch.distributed.is_initialized():
+            torch.distributed.barrier()
 
-    if local_rank == 0:
-        trainer.save_model(output_dir)
-        tokenizer.save_pretrained(output_dir)
-        adapter_path = ADAPTERS_DIR / adapter_name
-        adapter_path.mkdir(parents=True, exist_ok=True)
-        model.save_pretrained(str(adapter_path))
-        tokenizer.save_pretrained(str(adapter_path))
-        print("Adapter saved to", adapter_path)
-    if IS_4XA100 and torch.distributed.is_initialized():
-        torch.distributed.barrier()
+    print("Starting training... (Ctrl+C saves and exits)")
+    try:
+        trainer.train()
+    except KeyboardInterrupt:
+        print("\nCtrl+C — saving checkpoint and adapter then exiting...")
+        _save_final()
+        raise SystemExit(0)
+
+    _save_final()
 
 
 if __name__ == "__main__":
