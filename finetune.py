@@ -191,14 +191,17 @@ def main(quick: bool = False):
         training_kwargs["eval_strategy"] = "steps"
         training_kwargs["eval_steps"] = EVAL_STEPS
         training_kwargs["load_best_model_at_end"] = False
-    # SFT-specific args: in SFTConfig for TRL 0.16+ (server), else passed to SFTTrainer
-    training_kwargs["dataset_text_field"] = "messages"
-    training_kwargs["max_seq_length"] = MAX_SEQ_LENGTH
-    training_kwargs["dataset_num_proc"] = 4 if IS_4XA100 else 2
-    training_kwargs["packing"] = False
-    training_args = SFTConfig(**training_kwargs)
 
-    trainer = SFTTrainer(
+    # Build SFTConfig with only base training args (server TRL rejects SFT-specific params in __init__)
+    training_args = SFTConfig(**training_kwargs)
+    # Set SFT data params on config so trainer uses them when building data collator (server TRL reads from args)
+    setattr(training_args, "max_length", MAX_SEQ_LENGTH)
+    setattr(training_args, "max_seq_length", MAX_SEQ_LENGTH)
+    setattr(training_args, "dataset_text_field", "messages")
+    setattr(training_args, "dataset_num_proc", 4 if IS_4XA100 else 2)
+    setattr(training_args, "packing", False)
+
+    sft_trainer_kw = dict(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
@@ -206,6 +209,17 @@ def main(quick: bool = False):
         processing_class=tokenizer,
         callbacks=callbacks,
     )
+    # TRL version compatibility: some versions want these on SFTTrainer, not config
+    extra = {
+        "dataset_text_field": "messages",
+        "max_seq_length": MAX_SEQ_LENGTH,
+        "dataset_num_proc": 4 if IS_4XA100 else 2,
+        "packing": False,
+    }
+    try:
+        trainer = SFTTrainer(**sft_trainer_kw, **extra)
+    except TypeError:
+        trainer = SFTTrainer(**sft_trainer_kw)
 
     def _save_final():
         if local_rank == 0:
