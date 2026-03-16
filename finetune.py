@@ -113,8 +113,9 @@ def main(quick: bool = False):
             device_map=device_map,
             token=HF_TOKEN,
             trust_remote_code=True,
-            torch_dtype=compute_dtype if USE_4BIT else torch.bfloat16,
+            dtype=compute_dtype if USE_4BIT else torch.bfloat16,
             attn_implementation=attn_impl,
+            low_cpu_mem_usage=True,
         )
     except Exception as e:
         print("Model load failed: %s" % e)

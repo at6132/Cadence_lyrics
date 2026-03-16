@@ -14,6 +14,8 @@
 set -e
 cd "$(dirname "$0")"
 export LYRIC_DEVICE=4xa100
+# Reduce CUDA fragmentation so 70B load fits in 80GB
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 accelerate launch \
   --config_file configs/accelerate_4xa100.yaml \

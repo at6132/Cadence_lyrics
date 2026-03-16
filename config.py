@@ -33,7 +33,8 @@ if IS_4XA100:
     # Data parallel across 4 GPUs; each GPU holds the full 4-bit model.
     # Training capped at 5 hours.
     # =========================================================================
-    MODEL_ID = os.getenv("LYRIC_MODEL_ID", "meta-llama/Llama-3.3-70B-Instruct")
+    # Pre-quantized 4-bit = lower peak VRAM during load (~40GB vs ~80GB); same license as Meta Llama
+    MODEL_ID = os.getenv("LYRIC_MODEL_ID", "unsloth/Llama-3.3-70B-Instruct-bnb-4bit")
 
     # 70B 4-bit ~41GB + batch overhead; batch 4 per GPU fits 80GB comfortably
     # Global batch = 4 GPUs × 4 batch × 4 accum = 64
