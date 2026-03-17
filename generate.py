@@ -2,10 +2,12 @@
 Generate lyrics with the fine-tuned model (base + LoRA adapter).
 Uses the base model ID saved with the adapter so it works after copying
 adapters/ from server (Llama 70B) to local without changing config.
+Supports streaming via stream_callback.
 """
 import json
 import os
 import sys
+import threading
 import warnings
 from pathlib import Path
 
@@ -89,8 +91,10 @@ def generate(
     temperature: float = 0.85,
     do_sample: bool = True,
     system_prompt: str | None = None,
+    stream_callback: callable | None = None,
 ) -> str:
     import torch
+    from transformers import TextIteratorStreamer
 
     system_prompt = system_prompt or (
         "You are a songwriter. Write authentic, human-sounding lyrics. "
@@ -109,21 +113,51 @@ def generate(
     )
     inputs = tokenizer(text, return_tensors="pt").to(model.device)
 
-    with torch.no_grad():
-        out = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            do_sample=do_sample,
-            pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-            top_p=0.9,
-            repetition_penalty=1.1,
+    if stream_callback is None:
+        with torch.no_grad():
+            out = model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                do_sample=do_sample,
+                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+                top_p=0.9,
+                repetition_penalty=1.1,
+            )
+        reply = tokenizer.decode(
+            out[0][inputs.input_ids.shape[1] :], skip_special_tokens=True
         )
+        return reply.strip()
 
-    reply = tokenizer.decode(
-        out[0][inputs.input_ids.shape[1]:], skip_special_tokens=True
+    # Streaming: run generate in a thread, feed chunks to callback
+    streamer = TextIteratorStreamer(
+        tokenizer, skip_prompt=True, skip_special_tokens=True
     )
-    return reply.strip()
+    gen_kwargs = {
+        **inputs,
+        "max_new_tokens": max_new_tokens,
+        "temperature": temperature,
+        "do_sample": do_sample,
+        "pad_token_id": tokenizer.pad_token_id or tokenizer.eos_token_id,
+        "top_p": 0.9,
+        "repetition_penalty": 1.1,
+        "streamer": streamer,
+    }
+    accumulated = []
+
+    def run_generate():
+        with torch.no_grad():
+            model.generate(**gen_kwargs)
+
+    thread = threading.Thread(target=run_generate)
+    thread.start()
+    try:
+        for chunk in streamer:
+            accumulated.append(chunk)
+            stream_callback("".join(accumulated))
+    finally:
+        thread.join(timeout=1.0)
+    return "".join(accumulated).strip()
 
 
 def main():

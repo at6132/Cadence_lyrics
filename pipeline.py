@@ -79,8 +79,14 @@ def _dedupe_lines(text: str) -> str:
     return "\n".join(out).strip()
 
 
-def _call_model(prompt: str, system_prompt: str, max_new_tokens: int, temperature: float) -> str:
-    """Call the lyric model (generate module) with given system prompt and user prompt."""
+def _call_model(
+    prompt: str,
+    system_prompt: str,
+    max_new_tokens: int,
+    temperature: float,
+    stream_callback: callable | None = None,
+) -> str:
+    """Call the lyric model (generate module). If stream_callback(text_so_far) is set, stream output."""
     from generate import generate
     return generate(
         prompt,
@@ -88,11 +94,16 @@ def _call_model(prompt: str, system_prompt: str, max_new_tokens: int, temperatur
         temperature=temperature,
         do_sample=True,
         system_prompt=system_prompt,
+        stream_callback=stream_callback,
     )
 
 
-def run_draft(user_prompt: str, config: dict | None = None) -> str:
-    """Step A: Initial draft generation."""
+def run_draft(
+    user_prompt: str,
+    config: dict | None = None,
+    stream_callback: callable | None = None,
+) -> str:
+    """Step A: Initial draft generation. stream_callback(text_so_far) for streaming."""
     cfg = {**PIPELINE_CONFIG, **(config or {})}
     augmented = augment_user_prompt(user_prompt)
     return _call_model(
@@ -100,6 +111,7 @@ def run_draft(user_prompt: str, config: dict | None = None) -> str:
         DRAFT_SYSTEM_PROMPT,
         max_new_tokens=cfg["draft_max_tokens"],
         temperature=cfg["draft_temperature"],
+        stream_callback=stream_callback,
     ).strip()
 
 
@@ -116,8 +128,12 @@ def run_evaluator(lyrics: str, config: dict | None = None) -> dict | None:
     return _extract_json(raw)
 
 
-def run_rewrite(lyrics: str, config: dict | None = None) -> str:
-    """Step C: Humanization rewrite."""
+def run_rewrite(
+    lyrics: str,
+    config: dict | None = None,
+    stream_callback: callable | None = None,
+) -> str:
+    """Step C: Humanization rewrite. stream_callback(text_so_far) for streaming."""
     cfg = {**PIPELINE_CONFIG, **(config or {})}
     prompt = "Rewrite these lyrics to sound more human:\n\n" + lyrics
     return _call_model(
@@ -125,6 +141,7 @@ def run_rewrite(lyrics: str, config: dict | None = None) -> str:
         REWRITE_SYSTEM_PROMPT,
         max_new_tokens=cfg["rewrite_max_tokens"],
         temperature=cfg["rewrite_temperature"],
+        stream_callback=stream_callback,
     ).strip()
 
 
@@ -133,21 +150,32 @@ def run_pipeline(
     *,
     debug: bool = False,
     config: dict | None = None,
+    stream_callback: callable | None = None,
 ) -> str | dict:
     """
     Full pipeline: draft → blacklist/heuristic → evaluator → rewrite → score → retry.
+    stream_callback(phase, text_so_far) for streaming; phase in ("draft", "evaluating", "rewrite_1", "rewrite_2", "rewrite_3").
     Returns only final lyrics (str), or if debug=True a dict with final_lyrics, score, passes_used, etc.
     """
     cfg = {**PIPELINE_CONFIG, **(config or {})}
     score_cfg = {**SCORE_CONFIG, "pass_threshold": cfg["pass_threshold"]}
     blacklist = load_blacklist()
 
-    # Step A: Draft
-    draft = run_draft(user_prompt, config=cfg)
+    def cb(phase: str, text: str = "") -> None:
+        if stream_callback:
+            stream_callback(phase, text)
+
+    # Step A: Draft (streamed)
+    draft = run_draft(
+        user_prompt,
+        config=cfg,
+        stream_callback=(lambda t: cb("draft", t)) if stream_callback else None,
+    )
     draft = _dedupe_lines(draft)
 
     banned = match_phrases(draft, blacklist)
     heur = heuristic_flags(draft)
+    cb("evaluating", "")
     eval_result = run_evaluator(draft, config=cfg)
     eval_score = None
     if eval_result and isinstance(eval_result.get("score"), (int, float)):
@@ -161,8 +189,13 @@ def run_pipeline(
     rewrite_history = []
 
     # Rewrite loop: up to max_rewrite_passes rewrites (each pass rewrites current best)
-    for _ in range(cfg["max_rewrite_passes"]):
-        current = run_rewrite(best_lyrics, config=cfg)
+    for pass_num in range(cfg["max_rewrite_passes"]):
+        phase = f"rewrite_{pass_num + 1}"
+        current = run_rewrite(
+            best_lyrics,
+            config=cfg,
+            stream_callback=(lambda t, p=phase: cb(p, t)) if stream_callback else None,
+        )
         current = _dedupe_lines(current)
         rewrite_history.append(current)
 

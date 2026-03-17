@@ -1,6 +1,6 @@
 """
 Chat-style CLI for the anti-AI lyric pipeline.
-Rich-based UI: banner, panels, spinners, clear turn-taking.
+Rich-based UI: banner, panels, streaming output, clear turn-taking.
 """
 from __future__ import annotations
 
@@ -16,8 +16,6 @@ from rich.panel import Panel
 from rich.markdown import Markdown
 from rich.prompt import Prompt
 from rich.live import Live
-from rich.spinner import Spinner
-from rich.text import Text
 from rich.theme import Theme
 
 # Subtle, readable theme (works on light/dark backgrounds)
@@ -57,6 +55,18 @@ Just type a request like *"sad song about a rainy bus stop"* or *"upbeat pop cho
 """
     console.print(Panel(Markdown(help_text), title="[assistant] Commands[/assistant]", border_style="dim"))
     console.print()
+
+
+def _phase_title(phase: str) -> str:
+    """Human-readable title for pipeline phase."""
+    if phase == "draft":
+        return "[assistant]Writing draft…[/assistant]"
+    if phase == "evaluating":
+        return "[meta]Evaluating…[/meta]"
+    if phase.startswith("rewrite_"):
+        n = phase.replace("rewrite_", "")
+        return f"[assistant]Rewriting ({n})…[/assistant]"
+    return phase or "…"
 
 
 def show_lyrics(lyrics: str, *, debug: bool = False, debug_data: dict | None = None) -> None:
@@ -127,13 +137,39 @@ def run_chat() -> None:
             banner()
             continue
 
-        # Generate with spinner
+        # Generate with streaming live panel
+        stream_state: dict = {"phase": "draft", "text": ""}
+
+        def stream_cb(phase: str, text: str) -> None:
+            stream_state["phase"] = phase
+            stream_state["text"] = text or ""
+
+        def render_stream() -> Panel:
+            title = _phase_title(stream_state["phase"])
+            content = (stream_state["text"] or "").strip() or "[dim]…[/dim]"
+            return Panel(
+                content,
+                title=title,
+                border_style="green",
+                padding=(1, 2),
+                expand=False,
+            )
+
         with Live(
-            Spinner("dots", text="[meta]Writing lyrics…[/meta]"),
+            render_stream,
             console=console,
-            refresh_per_second=8,
+            refresh_per_second=12,
         ):
-            result = run_pipeline(user_input, debug=debug_mode, config=config)
+            result = run_pipeline(
+                user_input,
+                debug=debug_mode,
+                config=config,
+                stream_callback=stream_cb,
+            )
+            # Show final result in the same panel briefly
+            final_text = result.get("final_lyrics", result) if isinstance(result, dict) else result
+            stream_state["phase"] = "done"
+            stream_state["text"] = final_text
 
         if debug_mode and isinstance(result, dict):
             show_lyrics(
