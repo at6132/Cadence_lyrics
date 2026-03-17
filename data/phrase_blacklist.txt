@@ -1,0 +1,60 @@
+# Banned / suspicious lyric phrases (one per line). Case-insensitive; partial matches count.
+# Lines starting with # are ignored. Add more phrases below.
+broken heart
+shattered heart
+lost in the dark
+fading away
+fade away
+echo of your name
+ghost of you
+empty space
+hollow place
+slipping away
+holding on
+letting go
+drowning in my thoughts
+haunting me
+piece of me
+without you by my side
+ashes of
+light in the dark
+scars remain
+torn apart
+grasping at air
+fading like a photograph
+shadow of your smile
+heart of gold
+tears fall like rain
+love like a river
+burning desire
+end of the road
+crossroads of my mind
+walls come tumbling down
+pieces of my heart
+never let go
+hold me close
+into the night
+through the storm
+storm in my heart
+ocean of tears
+river of dreams
+walking on sunshine
+catch my breath
+lose myself
+find my way back
+second chance
+one more chance
+last goodbye
+final goodbye
+never say never
+here we go again
+same old story
+write our story
+chapter of my life
+turn the page
+new beginning
+start again
+pick up the pieces
+glue back together
+fall apart
+fall to pieces

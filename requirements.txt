@@ -19,3 +19,6 @@ protobuf
 
 # 4xA100 server: Flash Attention 2 (2x faster for 70B)
 # pip install flash-attn --no-build-isolation
+
+# CLI chat UI
+rich>=13.0.0
