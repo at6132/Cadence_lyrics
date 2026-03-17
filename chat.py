@@ -1,6 +1,7 @@
 """
-CLI chatbot for the lyric model. Loads base + adapter (local or HF), then loop.
-Usage: python chat.py [--hub]   # --hub = load adapter from Hugging Face
+CLI chatbot for the lyric model.
+Uses local adapter if adapters/lyric-human/ exists; otherwise loads from Hugging Face.
+Use --hub to force loading from HF even when local adapter is present.
 """
 import json
 import os
@@ -47,8 +48,12 @@ def load_model_and_tokenizer(use_hub: bool = False):
     from peft import PeftModel
 
     adapter_path = ADAPTERS_DIR / ADAPTER_NAME
-    if use_hub or not adapter_path.exists():
-        print("Loading adapter from Hugging Face: %s" % ADAPTER_HF_ID)
+    use_local = adapter_path.exists() and (adapter_path / "adapter_model.safetensors").exists()
+    if use_hub or not use_local:
+        if use_local and use_hub:
+            print("Loading adapter from Hugging Face (--hub): %s" % ADAPTER_HF_ID)
+        else:
+            print("Local adapter not found; loading from Hugging Face: %s" % ADAPTER_HF_ID)
         if not HF_TOKEN:
             raise SystemExit("Set HUGGING_FACE_HUB_TOKEN to load adapter from Hub.")
         _tokenizer = AutoTokenizer.from_pretrained(
@@ -74,7 +79,7 @@ def load_model_and_tokenizer(use_hub: bool = False):
         )
         _model = PeftModel.from_pretrained(_model, ADAPTER_HF_ID, token=HF_TOKEN)
     else:
-        print("Loading adapter from local: %s" % adapter_path)
+        print("Using local adapter: %s" % adapter_path.resolve())
         base_model_id = _get_base_model_id(adapter_path)
         _tokenizer = AutoTokenizer.from_pretrained(
             str(adapter_path),
@@ -132,7 +137,7 @@ def generate_reply(model, tokenizer, messages: list, max_new_tokens: int = 400, 
 def main():
     import argparse
     p = argparse.ArgumentParser(description="Chat with the lyric model (CLI)")
-    p.add_argument("--hub", action="store_true", help="Load adapter from Hugging Face (at6132/lyric-human-70b-lora)")
+    p.add_argument("--hub", action="store_true", help="Force load adapter from Hugging Face (ignore local adapters/)")
     p.add_argument("--max-tokens", type=int, default=400, help="Max new tokens per reply")
     p.add_argument("--temperature", type=float, default=0.85, help="Sampling temperature")
     args = p.parse_args()
