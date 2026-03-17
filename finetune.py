@@ -83,8 +83,7 @@ def main(quick: bool = False):
     # Device map: per-rank GPU in multi-GPU, auto otherwise
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
 
-    # Attention: try flash_attention_2 when requested (import can fail in multiprocess; try at load time)
-    attn_impl = "flash_attention_2" if USE_FLASH_ATTN_2 else "sdpa"
+    # Attention: try FA3 (prebuilt wheel) then FA2 then SDPA
     if IS_4XA100:
         device_map = {"": local_rank}
     else:
@@ -105,22 +104,27 @@ def main(quick: bool = False):
         token=HF_TOKEN,
         trust_remote_code=True,
         dtype=compute_dtype if USE_4BIT else torch.bfloat16,
-        attn_implementation=attn_impl,
         low_cpu_mem_usage=True,
     )
-    try:
+    attn_impl = None
+    if USE_FLASH_ATTN_2:
+        for candidate in ("flash_attention_3", "flash_attention_2"):
+            load_kw["attn_implementation"] = candidate
+            try:
+                model = AutoModelForCausalLM.from_pretrained(MODEL_ID, **load_kw)
+                attn_impl = candidate
+                if local_rank == 0:
+                    print("Using %s" % candidate.replace("_", " ").title())
+                break
+            except Exception as e1:
+                if local_rank == 0 and "flash" in str(e1).lower():
+                    print("%s not available, trying next..." % candidate)
+                continue
+    if attn_impl is None:
+        load_kw["attn_implementation"] = "sdpa"
         model = AutoModelForCausalLM.from_pretrained(MODEL_ID, **load_kw)
-        if local_rank == 0 and attn_impl == "flash_attention_2":
-            print("Using Flash Attention 2")
-    except Exception as e1:
-        if USE_FLASH_ATTN_2 and attn_impl == "flash_attention_2":
-            if local_rank == 0:
-                print("flash-attn not available, falling back to SDPA")
-            load_kw["attn_implementation"] = "sdpa"
-            model = AutoModelForCausalLM.from_pretrained(MODEL_ID, **load_kw)
-        else:
-            print("Model load failed: %s" % e1)
-            raise
+        if local_rank == 0 and USE_FLASH_ATTN_2:
+            print("flash-attn not available, falling back to SDPA")
     if USE_4BIT:
         model = prepare_model_for_kbit_training(model)
 
