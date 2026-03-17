@@ -16,13 +16,19 @@ from prompts import (
     REWRITE_SYSTEM_PROMPT,
     CRITIC_SYSTEM_PROMPT,
     augment_user_prompt,
+    is_pop_prompt,
 )
-from phrase_blacklist import load_blacklist, match_phrases, heuristic_flags
+from phrase_blacklist import load_blacklist, load_chorus_blacklist, match_phrases, heuristic_flags
 from scoring import (
-    human_realism_score,
+    rule_based_score,
+    total_score_with_chorus_and_musicality,
+    chorus_hook_score as score_chorus_hook,
+    passed_threshold_with_pop,
     passed_threshold,
     DEFAULT_CONFIG as SCORE_CONFIG,
 )
+from utils.chorus_analysis import analyze_chorus
+from utils.musicality_analysis import analyze_musicality
 
 # Pipeline config (1 rewrite only; pick best of draft vs rewrite_1 at the end)
 PIPELINE_CONFIG = {
@@ -86,8 +92,9 @@ def _write_run_log(
     passes_used: int,
     banned_phrases: List[str],
     log_dir: Path,
+    debug_extra: Optional[dict] = None,
 ) -> Path:
-    """Write one text file per run with prompt, draft, every eval step, rewrites, and final."""
+    """Write one text file per run with prompt, draft, evals, rewrites, final, and optional debug (chorus/musicality/breakdown)."""
     log_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     slug = _slug(user_prompt)
@@ -111,7 +118,6 @@ def _write_run_log(
         "Draft score (blended): " + str(round(draft_score, 1)),
         "",
     ]
-    # eval_history[0]=draft eval, eval_history[1]=after rewrite 1, ...; same for score_history
     for i in range(len(rewrite_history)):
         eval_data = eval_history[i + 1] if i + 1 < len(eval_history) else None
         score_val = score_history[i + 1] if i + 1 < len(score_history) else 0.0
@@ -143,6 +149,14 @@ def _write_run_log(
         f"Banned phrases in final: {banned_phrases}",
         "",
     ])
+    if debug_extra:
+        lines.extend([
+            "=" * 60,
+            "DEBUG (chorus / musicality / score breakdown)",
+            "=" * 60,
+            json.dumps(debug_extra, indent=2),
+            "",
+        ])
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
 
@@ -247,12 +261,33 @@ def run_pipeline(
     cfg = {**PIPELINE_CONFIG, **(config or {})}
     score_cfg = {**SCORE_CONFIG, "pass_threshold": cfg["pass_threshold"]}
     blacklist = load_blacklist()
+    chorus_blacklist = load_chorus_blacklist()
+    is_pop = is_pop_prompt(user_prompt)
     eval_history: List[Optional[dict]] = []
     score_history: List[float] = []
+    rewrite_weakened_chorus = False
 
     def cb(phase: str, text: str = "") -> None:
         if stream_callback:
             stream_callback(phase, text)
+
+    def score_candidate(lyrics: str, eval_dict: Optional[dict]) -> tuple:
+        """Returns (total_score, breakdown, chorus_analysis, musicality_analysis)."""
+        banned_c = match_phrases(lyrics, blacklist)
+        heur_c = heuristic_flags(lyrics)
+        rule_sc = rule_based_score(lyrics, banned_c, heur_c, score_cfg)
+        ev_sc = None
+        if eval_dict and isinstance(eval_dict.get("score"), (int, float)):
+            ev_sc = float(eval_dict["score"])
+        chorus_an = analyze_chorus(lyrics, chorus_blacklist)
+        chorus_bl_matches = chorus_an.get("generic_hook_flags", [])
+        ch_sc = score_chorus_hook(chorus_an, chorus_bl_matches, score_cfg)
+        mus_an = analyze_musicality(lyrics)
+        mus_sc = mus_an.get("musicality_score", 50.0)
+        total, breakdown = total_score_with_chorus_and_musicality(
+            rule_sc, ev_sc, ch_sc, mus_sc, is_pop, chorus_an, score_cfg
+        )
+        return total, breakdown, chorus_an, mus_an
 
     # Step A: Draft (streamed)
     draft = run_draft(
@@ -266,22 +301,24 @@ def run_pipeline(
     heur = heuristic_flags(draft)
     cb("evaluating", "")
     eval_result = run_evaluator(draft, config=cfg)
-    eval_score = None
-    if eval_result and isinstance(eval_result.get("score"), (int, float)):
-        eval_score = float(eval_result["score"])
-    score, rule_score = human_realism_score(draft, banned, heur, eval_score, score_cfg)
     eval_history.append(eval_result)
-    score_history.append(score)
+    draft_total, draft_breakdown, draft_chorus_analysis, draft_musicality = score_candidate(draft, eval_result)
+    score_history.append(draft_total)
 
-    # Candidates: always include draft; add each rewrite. Pick best by score at the end.
-    candidates: List[tuple] = [(draft, score, eval_result)]
+    # Candidates: (lyrics, selection_score, total_score, breakdown, chorus_analysis, musicality_analysis, eval_result, is_draft, rewrite_weakened_chorus)
+    WEAKENED_CHORUS_PENALTY = 15.0
+    candidates: List[tuple] = [
+        (draft, draft_total, draft_total, draft_breakdown, draft_chorus_analysis, draft_musicality, eval_result, True, False)
+    ]
     rewrite_history: List[str] = []
+    rewrite_chorus_analyses: List[dict] = []
+    rewrite_musicality_analyses: List[dict] = []
+    rewrite_breakdowns: List[dict] = []
     passes_used = 0
 
-    # Rewrite loop: each pass rewrites from DRAFT (not "best so far"), so we compare draft vs rewrite_1 fairly
     for pass_num in range(cfg["max_rewrite_passes"]):
         phase = f"rewrite_{pass_num + 1}"
-        rewrite_source = candidates[0][0]  # always rewrite from draft
+        rewrite_source = candidates[0][0]
         current = run_rewrite(
             rewrite_source,
             config=cfg,
@@ -293,20 +330,51 @@ def run_pipeline(
         banned_cur = match_phrases(current, blacklist)
         heur_cur = heuristic_flags(current)
         eval_cur = run_evaluator(current, config=cfg)
-        eval_score_cur = None
-        if eval_cur and isinstance(eval_cur.get("score"), (int, float)):
-            eval_score_cur = float(eval_cur["score"])
-        score_cur, _ = human_realism_score(current, banned_cur, heur_cur, eval_score_cur, score_cfg)
         eval_history.append(eval_cur)
-        score_history.append(score_cur)
-        candidates.append((current, score_cur, eval_cur))
+        cur_total, cur_breakdown, cur_chorus, cur_musicality = score_candidate(current, eval_cur)
+        score_history.append(cur_total)
+        rewrite_chorus_analyses.append(cur_chorus)
+        rewrite_musicality_analyses.append(cur_musicality)
+        rewrite_breakdowns.append(cur_breakdown)
+
+        # Did rewrite weaken chorus vs draft?
+        weakened = (
+            cur_chorus.get("memorability_score", 0) < draft_chorus_analysis.get("memorability_score", 0) - 10
+            or (cur_breakdown.get("chorus_hook_score", 0) < draft_breakdown.get("chorus_hook_score", 0) - 10)
+        )
+        if weakened:
+            rewrite_weakened_chorus = True
+        selection_score = cur_total - (WEAKENED_CHORUS_PENALTY if weakened else 0.0)
+        candidates.append((
+            current, selection_score, cur_total, cur_breakdown, cur_chorus, cur_musicality,
+            eval_cur, False, weakened,
+        ))
         passes_used += 1
-        if passed_threshold(score_cur, score_cfg) and not match_phrases(current, blacklist):
+        if passed_threshold_with_pop(cur_total, is_pop, cur_chorus, cur_breakdown.get("chorus_hook_score", 0), score_cfg) and not match_phrases(current, blacklist):
             break
 
-    # Pick best from all candidates (draft, rewrite_1, ...) by score
-    best_lyrics, best_score, best_eval_result = max(candidates, key=lambda c: c[1])
+    # Pick best by selection_score (total minus penalty if rewrite weakened chorus)
+    best = max(candidates, key=lambda c: c[1])
+    best_lyrics = best[0]
+    best_score = best[2]
+    best_breakdown = best[3]
+    best_eval_result = best[6]
     banned_final = match_phrases(best_lyrics, blacklist)
+
+    debug_extra = None
+    if debug or run_log_dir:
+        debug_extra = {
+            "is_pop_prompt": is_pop,
+            "draft_chorus_analysis": draft_chorus_analysis,
+            "draft_musicality_analysis": draft_musicality,
+            "draft_score_breakdown": draft_breakdown,
+            "rewrite_chorus_analysis": rewrite_chorus_analyses[0] if rewrite_chorus_analyses else None,
+            "rewrite_musicality_analysis": rewrite_musicality_analyses[0] if rewrite_musicality_analyses else None,
+            "rewrite_score_breakdown": rewrite_breakdowns[0] if rewrite_breakdowns else None,
+            "rewrite_weakened_chorus": rewrite_weakened_chorus,
+            "final_score_breakdown": best_breakdown,
+        }
+
     if run_log_dir:
         log_path = _write_run_log(
             user_prompt=user_prompt,
@@ -321,6 +389,7 @@ def run_pipeline(
             passes_used=passes_used,
             banned_phrases=banned_final,
             log_dir=Path(run_log_dir),
+            debug_extra=debug_extra,
         )
         if run_log_path_out is not None:
             run_log_path_out.append(str(log_path))
@@ -334,6 +403,12 @@ def run_pipeline(
             "evaluator_issues": (best_eval_result or {}).get("issues", []) if best_eval_result else [],
             "draft": draft,
             "rewrite_passes": rewrite_history,
+            "draft_chorus_analysis": draft_chorus_analysis,
+            "rewrite_chorus_analysis": rewrite_chorus_analyses[0] if rewrite_chorus_analyses else None,
+            "draft_score_breakdown": draft_breakdown,
+            "rewrite_score_breakdown": rewrite_breakdowns[0] if rewrite_breakdowns else None,
+            "rewrite_weakened_chorus": rewrite_weakened_chorus,
+            "final_score_breakdown": best_breakdown,
         }
     return best_lyrics
 

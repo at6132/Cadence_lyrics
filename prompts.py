@@ -39,6 +39,7 @@ Rewrite rules:
 - Avoid repeated line shapes and repeated phrasing.
 - Prioritize realism over prettiness.
 - Do NOT weaken the chorus, hook, or rhythm. If the rewrite makes the song less catchy or less singable, fix it.
+- Do not weaken the chorus or hook. The chorus must remain catchy, short enough to sing, and more memorable than the verses. If your rewrite makes the chorus flatter, more generic, or more prose-like, fix it.
 
 Return only the rewritten lyrics."""
 
@@ -91,14 +92,41 @@ AUGMENTATION_SUFFIX = """
 
 (Internal guidance: include specific details; avoid clichés; keep it conversational; imply emotion through concrete images instead of stating it; use real-world imagery.)"""
 
+# Pop/catchy/chorus/hook: add hidden guidance for distinct chorus and memorable hook
+POP_PROMPT_PATTERNS = (
+    "pop",
+    "catchy",
+    "chorus",
+    "hook",
+    "repeatable",
+    "singable",
+)
+
+POP_AUGMENTATION_SUFFIX = """
+
+(Internal guidance for song quality: write a distinct chorus with at least one memorable repeated line; keep chorus lines shorter than verse lines; make the hook simple enough to sing back after one listen; avoid generic breakup chorus language; do not let the chorus read like prose.)"""
+
 
 def augment_user_prompt(user_prompt: str) -> str:
     """
     If the user request is vague, append hidden instruction guidance.
+    If the request implies pop/catchy/chorus/hook, append pop-specific guidance.
     Do not show this augmentation to the user in the final output.
     """
-    lower = user_prompt.strip().lower()
+    stripped = user_prompt.strip()
+    lower = stripped.lower()
+    # Pop-specific first (so we can add both if needed)
+    for pattern in POP_PROMPT_PATTERNS:
+        if pattern in lower:
+            stripped = stripped + POP_AUGMENTATION_SUFFIX
+            break
     for pattern in VAGUE_PROMPT_PATTERNS:
         if pattern in lower and len(user_prompt.strip()) < 80:
-            return user_prompt.strip() + AUGMENTATION_SUFFIX
-    return user_prompt.strip()
+            return stripped + AUGMENTATION_SUFFIX
+    return stripped
+
+
+def is_pop_prompt(user_prompt: str) -> bool:
+    """True if the user request implies pop/catchy/chorus/hook (stricter chorus scoring)."""
+    lower = user_prompt.strip().lower()
+    return any(p in lower for p in POP_PROMPT_PATTERNS)

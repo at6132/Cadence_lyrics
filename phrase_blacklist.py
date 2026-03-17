@@ -37,6 +37,30 @@ def load_blacklist(path: Optional[Path] = None) -> List[str]:
     return phrases if phrases else list(DEFAULT_PHRASES)
 
 
+# Chorus-specific blacklist (stronger penalty when phrase appears in chorus)
+DEFAULT_CHORUS_PHRASES = [
+    "turn back time", "just strangers now", "crowded room", "feels the same", "don't feel the same",
+    "falling apart", "coming undone", "unraveling", "frayed and worn", "without you here",
+    "every little thing reminds me", "everyone's a stranger", "city's still awake",
+    "streetlights don't shine as bright", "memory of your touch",
+]
+
+
+def load_chorus_blacklist(path: Optional[Path] = None) -> List[str]:
+    """Load chorus-specific blacklist (one phrase per line, # = comment)."""
+    if path is None:
+        path = Path(__file__).resolve().parent / "data" / "chorus_blacklist.txt"
+    if not path.exists():
+        return list(DEFAULT_CHORUS_PHRASES)
+    phrases = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                phrases.append(line.strip().lower())
+    return phrases if phrases else list(DEFAULT_CHORUS_PHRASES)
+
+
 def match_phrases(text: str, blacklist: Optional[List[str]] = None) -> List[str]:
     """
     Return all blacklist phrases that appear in text (case-insensitive, partial match).

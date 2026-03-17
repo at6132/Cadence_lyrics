@@ -1,0 +1,17 @@
+# Chorus/hook-specific generic phrases (stronger penalty when in chorus)
+# One phrase per line; case-insensitive
+turn back time
+just strangers now
+crowded room
+feels the same
+don't feel the same
+falling apart
+coming undone
+unraveling
+frayed and worn
+without you here
+every little thing reminds me
+everyone's a stranger
+city's still awake
+streetlights don't shine as bright
+memory of your touch
