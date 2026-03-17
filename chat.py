@@ -74,7 +74,7 @@ def load_model_and_tokenizer(use_hub: bool = False):
             device_map="auto",
             token=HF_TOKEN,
             trust_remote_code=True,
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             attn_implementation="sdpa",
         )
         _model = PeftModel.from_pretrained(_model, ADAPTER_HF_ID, token=HF_TOKEN)
@@ -99,7 +99,7 @@ def load_model_and_tokenizer(use_hub: bool = False):
             device_map="auto",
             token=HF_TOKEN,
             trust_remote_code=True,
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             attn_implementation="sdpa",
         )
         _model = PeftModel.from_pretrained(_model, str(adapter_path))
@@ -118,10 +118,12 @@ def generate_reply(model, tokenizer, messages: list, max_new_tokens: int = 400, 
         add_generation_prompt=True,
     )
     inputs = tokenizer(text, return_tensors="pt").to(model.device)
+    max_length = inputs.input_ids.shape[1] + max_new_tokens
     with torch.no_grad():
         out = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
+            max_length=max_length,
             temperature=temperature,
             do_sample=True,
             pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
