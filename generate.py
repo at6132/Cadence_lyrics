@@ -6,9 +6,15 @@ adapters/ from server (Llama 70B) to local without changing config.
 import json
 import os
 import sys
+import warnings
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# Suppress noisy inference-time warnings
+warnings.filterwarnings("ignore", message=".*torch_dtype.*deprecated.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*quantization_config.*already has.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*max_new_tokens.*max_length.*", category=UserWarning)
 
 from config import MODEL_ID, ADAPTERS_DIR, ADAPTER_NAME
 
@@ -69,7 +75,7 @@ def load_model_and_tokenizer():
         device_map="auto",
         token=HF_TOKEN,
         trust_remote_code=True,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         attn_implementation="sdpa",
     )
     _model = PeftModel.from_pretrained(_model, str(adapter_path))
