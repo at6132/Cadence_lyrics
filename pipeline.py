@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Optional, Callable, Union
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, Callable, Union, List
 
 from prompts import (
     DRAFT_SYSTEM_PROMPT,
@@ -62,6 +64,87 @@ def _extract_json(text: str) -> Optional[dict]:
                     except json.JSONDecodeError:
                         break
     return None
+
+
+def _slug(s: str, max_len: int = 50) -> str:
+    """Safe filename slug from prompt."""
+    s = re.sub(r"[^\w\s-]", "", s)
+    s = re.sub(r"[-\s]+", "-", s).strip("-").lower()
+    return s[:max_len] if s else "run"
+
+
+def _write_run_log(
+    user_prompt: str,
+    draft: str,
+    draft_eval: Optional[dict],
+    draft_score: float,
+    rewrite_history: List[str],
+    eval_history: List[Optional[dict]],
+    score_history: List[float],
+    final_lyrics: str,
+    final_score: float,
+    passes_used: int,
+    banned_phrases: List[str],
+    log_dir: Path,
+) -> Path:
+    """Write one text file per run with prompt, draft, every eval step, rewrites, and final."""
+    log_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    slug = _slug(user_prompt)
+    path = log_dir / f"{ts}_{slug}.txt"
+    lines = [
+        "=" * 60,
+        "PROMPT",
+        "=" * 60,
+        user_prompt.strip(),
+        "",
+        "=" * 60,
+        "DRAFT",
+        "=" * 60,
+        draft.strip(),
+        "",
+        "=" * 60,
+        "EVALUATOR (draft)",
+        "=" * 60,
+        json.dumps(draft_eval, indent=2) if draft_eval else "(no evaluator output)",
+        "",
+        "Draft score (blended): " + str(round(draft_score, 1)),
+        "",
+    ]
+    # eval_history[0]=draft eval, eval_history[1]=after rewrite 1, ...; same for score_history
+    for i in range(len(rewrite_history)):
+        eval_data = eval_history[i + 1] if i + 1 < len(eval_history) else None
+        score_val = score_history[i + 1] if i + 1 < len(score_history) else 0.0
+        lines.extend([
+            "=" * 60,
+            f"REWRITE {i + 1}",
+            "=" * 60,
+            rewrite_history[i].strip(),
+            "",
+            "=" * 60,
+            f"EVALUATOR (rewrite {i + 1})",
+            "=" * 60,
+            json.dumps(eval_data, indent=2) if eval_data else "(no evaluator output)",
+            "",
+            f"Rewrite {i + 1} score (blended): " + str(round(score_val, 1)),
+            "",
+        ])
+    lines.extend([
+        "=" * 60,
+        "FINAL LYRICS",
+        "=" * 60,
+        final_lyrics.strip(),
+        "",
+        "=" * 60,
+        "RUN SUMMARY",
+        "=" * 60,
+        f"Final score: {round(final_score, 1)}",
+        f"Passes used: {passes_used}",
+        f"Banned phrases in final: {banned_phrases}",
+        "",
+    ])
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
 
 
 def _dedupe_lines(text: str) -> str:
@@ -152,15 +235,20 @@ def run_pipeline(
     debug: bool = False,
     config: Optional[dict] = None,
     stream_callback: Optional[Callable[[str, str], None]] = None,
+    run_log_dir: Optional[Path] = None,
+    run_log_path_out: Optional[List[str]] = None,
 ) -> Union[str, dict]:
     """
     Full pipeline: draft → blacklist/heuristic → evaluator → rewrite → score → retry.
     stream_callback(phase, text_so_far) for streaming; phase in ("draft", "evaluating", "rewrite_1", "rewrite_2", "rewrite_3").
+    If run_log_dir is set, writes a text file per run with prompt, draft, every eval step, rewrites, and final.
     Returns only final lyrics (str), or if debug=True a dict with final_lyrics, score, passes_used, etc.
     """
     cfg = {**PIPELINE_CONFIG, **(config or {})}
     score_cfg = {**SCORE_CONFIG, "pass_threshold": cfg["pass_threshold"]}
     blacklist = load_blacklist()
+    eval_history: List[Optional[dict]] = []
+    score_history: List[float] = []
 
     def cb(phase: str, text: str = "") -> None:
         if stream_callback:
@@ -182,12 +270,14 @@ def run_pipeline(
     if eval_result and isinstance(eval_result.get("score"), (int, float)):
         eval_score = float(eval_result["score"])
     score, rule_score = human_realism_score(draft, banned, heur, eval_score, score_cfg)
+    eval_history.append(eval_result)
+    score_history.append(score)
 
     best_lyrics = draft
     best_score = score
     best_eval_result = eval_result
     passes_used = 0
-    rewrite_history = []
+    rewrite_history: List[str] = []
 
     # Rewrite loop: up to max_rewrite_passes rewrites (each pass rewrites current best)
     for pass_num in range(cfg["max_rewrite_passes"]):
@@ -207,6 +297,8 @@ def run_pipeline(
         if eval_cur and isinstance(eval_cur.get("score"), (int, float)):
             eval_score_cur = float(eval_cur["score"])
         score_cur, _ = human_realism_score(current, banned_cur, heur_cur, eval_score_cur, score_cfg)
+        eval_history.append(eval_cur)
+        score_history.append(score_cur)
 
         if score_cur > best_score:
             best_score = score_cur
@@ -217,12 +309,31 @@ def run_pipeline(
         if passed_threshold(best_score, score_cfg) and not match_phrases(best_lyrics, blacklist):
             break
 
+    banned_final = match_phrases(best_lyrics, blacklist)
+    if run_log_dir:
+        log_path = _write_run_log(
+            user_prompt=user_prompt,
+            draft=draft,
+            draft_eval=eval_history[0] if eval_history else None,
+            draft_score=score_history[0] if score_history else 0.0,
+            rewrite_history=rewrite_history,
+            eval_history=eval_history,
+            score_history=score_history,
+            final_lyrics=best_lyrics,
+            final_score=best_score,
+            passes_used=passes_used,
+            banned_phrases=banned_final,
+            log_dir=Path(run_log_dir),
+        )
+        if run_log_path_out is not None:
+            run_log_path_out.append(str(log_path))
+
     if debug:
         return {
             "final_lyrics": best_lyrics,
             "score": best_score,
             "passes_used": passes_used,
-            "banned_phrases": match_phrases(best_lyrics, blacklist),
+            "banned_phrases": banned_final,
             "evaluator_issues": (best_eval_result or {}).get("issues", []) if best_eval_result else [],
             "draft": draft,
             "rewrite_passes": rewrite_history,
@@ -237,10 +348,12 @@ def main():
     p.add_argument("--debug", action="store_true", help="Return structured object with score, passes, etc.")
     p.add_argument("--max-rewrites", type=int, default=3, help="Max total rewrite passes (1 initial + retries)")
     p.add_argument("--threshold", type=int, default=80, help="Score threshold to pass")
+    p.add_argument("--log-dir", type=str, default=None, help="Write a run log (draft, evals, rewrites) to this directory")
     args = p.parse_args()
 
     config = {"max_rewrite_passes": args.max_rewrites, "pass_threshold": args.threshold}
-    result = run_pipeline(args.prompt, debug=args.debug, config=config)
+    log_dir = Path(args.log_dir) if args.log_dir else None
+    result = run_pipeline(args.prompt, debug=args.debug, config=config, run_log_dir=log_dir)
 
     if args.debug and isinstance(result, dict):
         print(json.dumps(result, indent=2))

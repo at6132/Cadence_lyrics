@@ -129,6 +129,7 @@ def run_chat() -> None:
 
     debug_mode = False
     config = {"max_rewrite_passes": 3, "pass_threshold": 80}
+    run_log_dir = _root / "run_logs"
 
     while True:
         try:
@@ -164,6 +165,7 @@ def run_chat() -> None:
             stream_panel.phase = phase
             stream_panel.text = text or ""
 
+        run_log_paths = []
         with Live(
             stream_panel,
             console=console,
@@ -174,11 +176,16 @@ def run_chat() -> None:
                 debug=debug_mode,
                 config=config,
                 stream_callback=stream_cb,
+                run_log_dir=run_log_dir,
+                run_log_path_out=run_log_paths,
             )
             # Show final result in the same panel briefly
             final_text = result.get("final_lyrics", result) if isinstance(result, dict) else result
             stream_panel.phase = "done"
             stream_panel.text = final_text
+
+        if run_log_paths:
+            console.print("[meta]Run log saved: " + run_log_paths[0] + "[/meta]")
 
         if debug_mode and isinstance(result, dict):
             show_lyrics(

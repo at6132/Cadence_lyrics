@@ -54,6 +54,7 @@ wandb/
 *.log
 runs/
 outputs/
+run_logs/
 
 # IDE and OS
 .idea/
