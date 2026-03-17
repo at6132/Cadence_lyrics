@@ -128,7 +128,7 @@ def run_chat() -> None:
     console.print("[meta]Ready. Type your request below.[/meta]\n")
 
     debug_mode = False
-    config = {"max_rewrite_passes": 3, "pass_threshold": 80}
+    config = {"max_rewrite_passes": 1, "pass_threshold": 85}
     run_log_dir = _root / "run_logs"
 
     while True:

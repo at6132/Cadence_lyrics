@@ -34,8 +34,8 @@ def main():
         action="store_true",
         help="Print structured object: final_lyrics, score, passes_used, banned_phrases, evaluator_issues, draft, rewrite_passes",
     )
-    p.add_argument("--max-rewrites", type=int, default=3, help="Max total rewrite passes")
-    p.add_argument("--threshold", type=int, default=80, help="Score threshold to pass")
+    p.add_argument("--max-rewrites", type=int, default=1, help="Max rewrite passes; best of draft vs rewrites is picked")
+    p.add_argument("--threshold", type=int, default=85, help="Score threshold to pass")
     args = p.parse_args()
 
     if args.chat:

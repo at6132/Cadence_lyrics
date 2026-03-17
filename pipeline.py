@@ -24,10 +24,10 @@ from scoring import (
     DEFAULT_CONFIG as SCORE_CONFIG,
 )
 
-# Pipeline config (max_rewrite_passes = 1 initial + 2 retries = 3 total rewrites)
+# Pipeline config (1 rewrite only; pick best of draft vs rewrite_1 at the end)
 PIPELINE_CONFIG = {
-    "max_rewrite_passes": 3,
-    "pass_threshold": 80,
+    "max_rewrite_passes": 1,
+    "pass_threshold": 85,
     "draft_max_tokens": 500,
     "rewrite_max_tokens": 550,
     "evaluator_max_tokens": 600,
@@ -273,17 +273,17 @@ def run_pipeline(
     eval_history.append(eval_result)
     score_history.append(score)
 
-    best_lyrics = draft
-    best_score = score
-    best_eval_result = eval_result
-    passes_used = 0
+    # Candidates: always include draft; add each rewrite. Pick best by score at the end.
+    candidates: List[tuple] = [(draft, score, eval_result)]
     rewrite_history: List[str] = []
+    passes_used = 0
 
-    # Rewrite loop: up to max_rewrite_passes rewrites (each pass rewrites current best)
+    # Rewrite loop: each pass rewrites from DRAFT (not "best so far"), so we compare draft vs rewrite_1 fairly
     for pass_num in range(cfg["max_rewrite_passes"]):
         phase = f"rewrite_{pass_num + 1}"
+        rewrite_source = candidates[0][0]  # always rewrite from draft
         current = run_rewrite(
-            best_lyrics,
+            rewrite_source,
             config=cfg,
             stream_callback=(lambda t, p=phase: cb(p, t)) if stream_callback else None,
         )
@@ -299,16 +299,13 @@ def run_pipeline(
         score_cur, _ = human_realism_score(current, banned_cur, heur_cur, eval_score_cur, score_cfg)
         eval_history.append(eval_cur)
         score_history.append(score_cur)
-
-        if score_cur > best_score:
-            best_score = score_cur
-            best_lyrics = current
-            best_eval_result = eval_cur
-
+        candidates.append((current, score_cur, eval_cur))
         passes_used += 1
-        if passed_threshold(best_score, score_cfg) and not match_phrases(best_lyrics, blacklist):
+        if passed_threshold(score_cur, score_cfg) and not match_phrases(current, blacklist):
             break
 
+    # Pick best from all candidates (draft, rewrite_1, ...) by score
+    best_lyrics, best_score, best_eval_result = max(candidates, key=lambda c: c[1])
     banned_final = match_phrases(best_lyrics, blacklist)
     if run_log_dir:
         log_path = _write_run_log(
@@ -346,8 +343,8 @@ def main():
     p = argparse.ArgumentParser(description="Anti-AI lyric pipeline: draft → detect → rewrite → score → retry")
     p.add_argument("prompt", nargs="?", default="Write a verse and chorus about heartbreak.", help="Lyric request")
     p.add_argument("--debug", action="store_true", help="Return structured object with score, passes, etc.")
-    p.add_argument("--max-rewrites", type=int, default=3, help="Max total rewrite passes (1 initial + retries)")
-    p.add_argument("--threshold", type=int, default=80, help="Score threshold to pass")
+    p.add_argument("--max-rewrites", type=int, default=1, help="Max rewrite passes (each from draft); best of draft vs rewrites is picked")
+    p.add_argument("--threshold", type=int, default=85, help="Score threshold to pass")
     p.add_argument("--log-dir", type=str, default=None, help="Write a run log (draft, evals, rewrites) to this directory")
     args = p.parse_args()
 

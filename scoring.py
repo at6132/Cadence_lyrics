@@ -16,7 +16,7 @@ DEFAULT_CONFIG = {
     "penalty_repeated_structure": 6,
     "reward_concrete_detail": 2,   # cap applied
     "evaluator_weight": 0.5,       # blend: (1-w)*rule_score + w*evaluator_score
-    "pass_threshold": 80,
+    "pass_threshold": 85,
     "max_reward_concrete": 10,
 }
 

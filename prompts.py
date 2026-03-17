@@ -38,6 +38,7 @@ Rewrite rules:
 - Avoid dramatic filler language.
 - Avoid repeated line shapes and repeated phrasing.
 - Prioritize realism over prettiness.
+- Do NOT weaken the chorus, hook, or rhythm. If the rewrite makes the song less catchy or less singable, fix it.
 
 Return only the rewritten lyrics."""
 
