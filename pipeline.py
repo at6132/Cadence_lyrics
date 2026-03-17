@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Optional, Callable, Union
 
 from prompts import (
     DRAFT_SYSTEM_PROMPT,
@@ -36,7 +37,7 @@ PIPELINE_CONFIG = {
 }
 
 
-def _extract_json(text: str) -> dict | None:
+def _extract_json(text: str) -> Optional[dict]:
     """Extract JSON from model reply (handles ```json ... ``` or raw JSON)."""
     text = text.strip()
     # Code block
@@ -84,7 +85,7 @@ def _call_model(
     system_prompt: str,
     max_new_tokens: int,
     temperature: float,
-    stream_callback: callable | None = None,
+    stream_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
     """Call the lyric model (generate module). If stream_callback(text_so_far) is set, stream output."""
     from generate import generate
@@ -100,8 +101,8 @@ def _call_model(
 
 def run_draft(
     user_prompt: str,
-    config: dict | None = None,
-    stream_callback: callable | None = None,
+    config: Optional[dict] = None,
+    stream_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
     """Step A: Initial draft generation. stream_callback(text_so_far) for streaming."""
     cfg = {**PIPELINE_CONFIG, **(config or {})}
@@ -115,7 +116,7 @@ def run_draft(
     ).strip()
 
 
-def run_evaluator(lyrics: str, config: dict | None = None) -> dict | None:
+def run_evaluator(lyrics: str, config: Optional[dict] = None) -> Optional[dict]:
     """Step: Run critic/evaluator; return parsed JSON or None."""
     cfg = {**PIPELINE_CONFIG, **(config or {})}
     prompt = "Evaluate these lyrics:\n\n" + lyrics
@@ -130,8 +131,8 @@ def run_evaluator(lyrics: str, config: dict | None = None) -> dict | None:
 
 def run_rewrite(
     lyrics: str,
-    config: dict | None = None,
-    stream_callback: callable | None = None,
+    config: Optional[dict] = None,
+    stream_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
     """Step C: Humanization rewrite. stream_callback(text_so_far) for streaming."""
     cfg = {**PIPELINE_CONFIG, **(config or {})}
@@ -149,9 +150,9 @@ def run_pipeline(
     user_prompt: str,
     *,
     debug: bool = False,
-    config: dict | None = None,
-    stream_callback: callable | None = None,
-) -> str | dict:
+    config: Optional[dict] = None,
+    stream_callback: Optional[Callable[[str, str], None]] = None,
+) -> Union[str, dict]:
     """
     Full pipeline: draft → blacklist/heuristic → evaluator → rewrite → score → retry.
     stream_callback(phase, text_so_far) for streaming; phase in ("draft", "evaluating", "rewrite_1", "rewrite_2", "rewrite_3").

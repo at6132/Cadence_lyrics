@@ -4,6 +4,7 @@ Combines blacklist hits, repetition, abstractness, specificity, and optional eva
 """
 import re
 from collections import Counter
+from typing import Optional, List
 
 # Default config (easy to tune)
 DEFAULT_CONFIG = {
@@ -47,9 +48,9 @@ def _concrete_detail_count(text: str) -> int:
 
 def rule_based_score(
     lyrics: str,
-    banned_matches: list[str],
+    banned_matches: List[str],
     heuristic_flags: dict,
-    config: dict | None = None,
+    config: Optional[dict] = None,
 ) -> float:
     """
     Score 0–100 from rules only (no LLM).
@@ -81,8 +82,8 @@ def rule_based_score(
 
 def blend_with_evaluator(
     rule_score: float,
-    evaluator_score: float | None,
-    config: dict | None = None,
+    evaluator_score: Optional[float],
+    config: Optional[dict] = None,
 ) -> float:
     """Blend rule-based score with evaluator LLM score (0–100)."""
     cfg = {**DEFAULT_CONFIG, **(config or {})}
@@ -94,11 +95,11 @@ def blend_with_evaluator(
 
 def human_realism_score(
     lyrics: str,
-    banned_matches: list[str],
+    banned_matches: List[str],
     heuristic_flags: dict,
-    evaluator_score: float | None = None,
-    config: dict | None = None,
-) -> tuple[float, float]:
+    evaluator_score: Optional[float] = None,
+    config: Optional[dict] = None,
+) -> tuple:
     """
     Returns (final_score, rule_only_score).
     Final score is blended with evaluator if provided.
@@ -109,6 +110,6 @@ def human_realism_score(
     return final, rule
 
 
-def passed_threshold(score: float, config: dict | None = None) -> bool:
+def passed_threshold(score: float, config: Optional[dict] = None) -> bool:
     cfg = {**DEFAULT_CONFIG, **(config or {})}
     return score >= cfg["pass_threshold"]

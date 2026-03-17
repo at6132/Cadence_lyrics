@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
 
 _root = Path(__file__).resolve().parent
 if str(_root) not in sys.path:
@@ -69,7 +70,7 @@ def _phase_title(phase: str) -> str:
     return phase or "…"
 
 
-def show_lyrics(lyrics: str, *, debug: bool = False, debug_data: dict | None = None) -> None:
+def show_lyrics(lyrics: str, *, debug: bool = False, debug_data: Optional[dict] = None) -> None:
     """Render lyrics in a panel; if debug, show score and meta below."""
     content = lyrics.strip() or "[dim](no lyrics generated)[/dim]"
     panel = Panel(

@@ -10,6 +10,7 @@ import sys
 import threading
 import warnings
 from pathlib import Path
+from typing import Optional, Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -90,8 +91,8 @@ def generate(
     max_new_tokens: int = 400,
     temperature: float = 0.85,
     do_sample: bool = True,
-    system_prompt: str | None = None,
-    stream_callback: callable | None = None,
+    system_prompt: Optional[str] = None,
+    stream_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
     import torch
     from transformers import TextIteratorStreamer

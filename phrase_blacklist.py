@@ -4,6 +4,7 @@ Case-insensitive matching; partial phrase detection; returns all matches.
 """
 from pathlib import Path
 import re
+from typing import Optional, List, Dict, Union
 
 # Default phrases if no file is found (subset; full list in data/phrase_blacklist.txt)
 DEFAULT_PHRASES = [
@@ -21,7 +22,7 @@ GENERIC_RHYME_WORDS = {"name", "pain", "rain", "remain", "away", "day", "way", "
 ABSTRACT_EMOTION = {"love", "pain", "heart", "soul", "dream", "hope", "fear", "tears", "joy", "sadness", "loneliness", "darkness", "light", "forever", "never"}
 
 
-def load_blacklist(path: Path | None = None) -> list[str]:
+def load_blacklist(path: Optional[Path] = None) -> List[str]:
     """Load blacklist from file (one phrase per line, # = comment). Fallback to DEFAULT_PHRASES."""
     if path is None:
         path = Path(__file__).resolve().parent / "data" / "phrase_blacklist.txt"
@@ -36,7 +37,7 @@ def load_blacklist(path: Path | None = None) -> list[str]:
     return phrases if phrases else list(DEFAULT_PHRASES)
 
 
-def match_phrases(text: str, blacklist: list[str] | None = None) -> list[str]:
+def match_phrases(text: str, blacklist: Optional[List[str]] = None) -> List[str]:
     """
     Return all blacklist phrases that appear in text (case-insensitive, partial match).
     """
@@ -50,7 +51,7 @@ def match_phrases(text: str, blacklist: list[str] | None = None) -> list[str]:
     return found
 
 
-def heuristic_flags(text: str) -> dict[str, bool | list]:
+def heuristic_flags(text: str) -> Dict[str, Union[bool, list]]:
     """
     Softer heuristic flags for suspicious wording.
     Returns dict with keys: abstract_heavy_line, obvious_rhyme_ending, repeated_structure.
