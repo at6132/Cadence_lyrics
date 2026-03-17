@@ -6,27 +6,49 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
-# Section labels (case-insensitive)
-SECTION_PATTERN = re.compile(
-    r"^\s*\[?\s*(verse|chorus|hook|bridge|pre.?chorus|outro|intro)\s*\]?\s*$",
+# Section headers: [Chorus], Chorus:, Verse 1:, VERSE 1, Pre-Chorus:, etc.
+# Optional [ prefix, optional number after verse, optional ] and :, case-insensitive.
+SECTION_HEADER_PATTERN = re.compile(
+    r"^\s*\[?\s*"
+    r"(verse\s*\d*|chorus|hook|bridge|pre\s*[- ]?\s*chorus|outro|intro)"
+    r"\s*\]?\s*:?\s*$",
     re.IGNORECASE,
 )
+
+
+def _normalize_section_type(raw: str) -> str:
+    """Map 'Verse 1', 'Pre-Chorus', etc. to canonical 'verse', 'prechorus'."""
+    s = raw.lower().strip()
+    if s.startswith("verse"):
+        return "verse"
+    if s.startswith("pre") and "chorus" in s:
+        return "prechorus"
+    for name in ("chorus", "hook", "bridge", "outro", "intro"):
+        if name in s or s == name:
+            return name
+    return s.replace(" ", "").replace("-", "")
 
 
 def _normalize_line(s: str) -> str:
     return " ".join(s.strip().split()).lower()
 
 
-def _get_sections(lyrics: str) -> List[tuple]:
+def get_sections(
+    lyrics: str,
+) -> Tuple[List[Tuple[str, List[str]]], List[str]]:
     """
-    Split lyrics into (section_type, lines) where section_type is 'verse', 'chorus', etc. or 'block'.
+    Split lyrics into (section_type, lines) and list of detected header strings.
+    Section type is canonical: verse, chorus, hook, bridge, prechorus, outro, intro, or block.
+    Supports: Verse 1:, Chorus:, [Chorus], VERSE 1, Pre-Chorus:, etc. Case-insensitive, optional numbering and colon.
+    Returns (sections, detected_section_headers).
     """
     lines = lyrics.splitlines()
-    sections: List[tuple] = []
+    sections: List[Tuple[str, List[str]]] = []
     current_type: Optional[str] = None
     current_lines: List[str] = []
+    detected_headers: List[str] = []
 
     for raw in lines:
         line = raw.strip()
@@ -36,30 +58,36 @@ def _get_sections(lyrics: str) -> List[tuple]:
                 current_lines = []
             current_type = None
             continue
-        match = SECTION_PATTERN.match(line)
+        match = SECTION_HEADER_PATTERN.match(line)
         if match:
             if current_lines:
                 sections.append((current_type or "block", current_lines))
                 current_lines = []
-            current_type = match.group(1).lower().replace(" ", "").replace("-", "")
-            if "prechorus" in current_type or "prechorus" in current_type:
-                current_type = "prechorus"
+            raw_label = match.group(1).strip()
+            detected_headers.append(raw_label)
+            current_type = _normalize_section_type(raw_label)
             continue
         current_lines.append(line)
 
     if current_lines:
         sections.append((current_type or "block", current_lines))
+    return sections, detected_headers
+
+
+def _get_sections(lyrics: str) -> List[tuple]:
+    """Back-compat wrapper; returns sections only."""
+    sections, _ = get_sections(lyrics)
     return sections
 
 
 def _infer_chorus_sections(sections: List[tuple]) -> List[List[str]]:
     """
-    Return list of chorus line lists. Use explicit [Chorus] or infer by repetition.
+    Return list of chorus line lists. Use explicit Chorus/Hook labels as primary; fallback to repeated-block only when no labels.
     """
-    explicit = [lines for stype, lines in sections if stype == "chorus" and lines]
+    explicit = [lines for stype, lines in sections if stype in ("chorus", "hook") and lines]
     if explicit:
         return explicit
-    # No labels: find the block that repeats most (or is repeated verbatim)
+    # No explicit labels: find the block that repeats most (or is repeated verbatim)
     blocks = [lines for _, lines in sections if len(lines) >= 2]
     if not blocks:
         return []
@@ -144,8 +172,13 @@ def analyze_chorus(
     Analyze lyrics for chorus/hook presence and quality.
     chorus_blacklist: phrases that count as generic in chorus (stronger penalty).
     """
-    sections = _get_sections(lyrics)
+    sections, detected_section_headers = get_sections(lyrics)
     chorus_sections = _infer_chorus_sections(sections)
+    has_explicit_chorus = any(
+        stype in ("chorus", "hook") for stype, _ in sections
+    )
+    chorus_source = "explicit_labels" if has_explicit_chorus else "fallback_repeated_blocks"
+
     all_lines = [l for _, lines in sections for l in lines]
     chorus_lines_flat = [l for c in chorus_sections for l in c] if chorus_sections else []
     hook_lines = _hook_candidates(chorus_lines_flat, all_lines) if chorus_lines_flat else []
@@ -165,6 +198,8 @@ def analyze_chorus(
             if phrase.lower() in chorus_text:
                 generic_hook_flags.append(phrase)
 
+    parsed_sections = [{"type": stype, "line_count": len(lines)} for stype, lines in sections]
+
     return {
         "has_chorus": len(chorus_sections) > 0,
         "chorus_sections_found": len(chorus_sections),
@@ -175,4 +210,7 @@ def analyze_chorus(
         "memorability_score": round(memorability, 1),
         "generic_hook_flags": generic_hook_flags,
         "is_prose_like": is_prose_like,
+        "parsed_sections": parsed_sections,
+        "detected_section_headers": detected_section_headers,
+        "chorus_source": chorus_source,
     }

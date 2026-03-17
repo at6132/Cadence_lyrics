@@ -1,52 +1,19 @@
 """
 Musicality / anti-prose analysis for the lyric pipeline.
 Detects prose-like lines, storytelling overload, verse/chorus distinction, singability.
+Uses shared section parsing from chorus_analysis for consistent Verse/Chorus detection.
 """
 from __future__ import annotations
 
 import re
 from typing import List, Dict, Any
 
-# Reuse section parsing pattern
-SECTION_PATTERN = re.compile(
-    r"^\s*\[?\s*(verse|chorus|hook|bridge|pre.?chorus|outro|intro)\s*\]?\s*$",
-    re.IGNORECASE,
-)
+from utils.chorus_analysis import get_sections
 
 # Approximate "full sentence" = ends with . ! ? or has a comma and is long
 SENTENCE_END = re.compile(r"[.!?]\s*$")
-# Line feels like prose if: 15+ words, or 12+ words and ends with period, or has multiple clauses
 LONG_LINE_WORD_THRESHOLD = 14
 PROSE_LIKE_WORD_THRESHOLD = 11
-
-
-def _get_sections(lyrics: str) -> List[tuple]:
-    """Return (section_type, lines) list."""
-    lines = lyrics.splitlines()
-    sections: List[tuple] = []
-    current_type: str | None = None
-    current_lines: List[str] = []
-
-    for raw in lines:
-        line = raw.strip()
-        if not line:
-            if current_lines:
-                sections.append((current_type or "block", current_lines))
-                current_lines = []
-            current_type = None
-            continue
-        match = SECTION_PATTERN.match(line)
-        if match:
-            if current_lines:
-                sections.append((current_type or "block", current_lines))
-                current_lines = []
-            current_type = match.group(1).lower().replace(" ", "").replace("-", "")
-            continue
-        current_lines.append(line)
-
-    if current_lines:
-        sections.append((current_type or "block", current_lines))
-    return sections
 
 
 def _word_count(line: str) -> int:
@@ -78,7 +45,7 @@ def analyze_musicality(lyrics: str) -> Dict[str, Any]:
     """
     Analyze lyrics for musicality vs prose: line length, prose ratio, verse/chorus distinction.
     """
-    sections = _get_sections(lyrics)
+    sections, _ = get_sections(lyrics)
     all_lines = [l for _, lines in sections for l in lines if l.strip()]
     if not all_lines:
         return {
@@ -100,7 +67,7 @@ def analyze_musicality(lyrics: str) -> Dict[str, Any]:
 
     # Verse vs chorus distinction: compare avg line length of verse blocks vs chorus blocks
     verse_lines = [l for stype, lines in sections if stype in ("verse", "block") for l in lines]
-    chorus_lines = [l for stype, lines in sections if stype == "chorus" for l in lines]
+    chorus_lines = [l for stype, lines in sections if stype in ("chorus", "hook") for l in lines]
     verse_chorus_distinction_score = 50.0
     if verse_lines and chorus_lines:
         v_avg = sum(_word_count(l) for l in verse_lines) / len(verse_lines)
