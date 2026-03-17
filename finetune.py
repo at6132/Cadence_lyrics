@@ -52,7 +52,7 @@ QUICK_MAX_STEPS = 50
 QUICK_MODEL_ID = "Qwen/Qwen2.5-3B-Instruct"
 
 
-def main(quick: bool = False):
+def main(quick: bool = False, max_steps_override: int | None = None):
     train_path = PROCESSED_DIR / "train.jsonl"
     if not train_path.exists():
         raise SystemExit(
@@ -159,7 +159,11 @@ def main(quick: bool = False):
         else:
             print("Train: %d (no eval set; early stopping disabled)" % len(train_dataset))
 
-    max_steps = QUICK_MAX_STEPS if quick else (MAX_STEPS if IS_4XA100 and MAX_STEPS > 0 else -1)
+    max_steps = (
+        max_steps_override
+        if max_steps_override is not None
+        else (QUICK_MAX_STEPS if quick else (MAX_STEPS if IS_4XA100 and MAX_STEPS > 0 else -1))
+    )
     if IS_4XA100 and not quick:
         print("4×A100 80GB mode: %s, max_steps=%d (≤5h cap)" % (MODEL_ID, max_steps))
 
@@ -255,5 +259,6 @@ if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser()
     p.add_argument("--quick", action="store_true", help="Quick local test: 500 samples, 50 steps")
+    p.add_argument("--max-steps", type=int, default=None, metavar="N", help="Override max training steps (e.g. 1 for sanity check)")
     args = p.parse_args()
-    main(quick=args.quick)
+    main(quick=args.quick, max_steps_override=args.max_steps)

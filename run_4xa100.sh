@@ -19,4 +19,4 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 accelerate launch \
   --config_file configs/accelerate_4xa100.yaml \
-  finetune.py
+  finetune.py "$@"
