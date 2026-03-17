@@ -2,6 +2,7 @@
 System prompts and user-prompt augmentation for the anti-AI lyric pipeline.
 All prompts are used at inference time only (no retraining).
 """
+from typing import List
 
 # -----------------------------------------------------------------------------
 # A. Draft generation — first-pass lyric writing
@@ -92,15 +93,18 @@ AUGMENTATION_SUFFIX = """
 
 (Internal guidance: include specific details; avoid clichés; keep it conversational; imply emotion through concrete images instead of stating it; use real-world imagery.)"""
 
-# Pop/catchy/chorus/hook: add hidden guidance for distinct chorus and memorable hook
-POP_PROMPT_PATTERNS = (
+# Pop mode: clear cues only. "Singable" / "repeatable" alone do NOT trigger strict pop scoring.
+POP_PROMPT_STRONG_PATTERNS = (
     "pop",
+    "catchy chorus",
+    "hook",
+    "repeatable chorus",
+    "memorable chorus",
     "catchy",
     "chorus",
-    "hook",
-    "repeatable",
-    "singable",
 )
+# For augmentation (hidden guidance) we use the same list.
+POP_AUGMENTATION_PATTERNS = POP_PROMPT_STRONG_PATTERNS
 
 POP_AUGMENTATION_SUFFIX = """
 
@@ -115,8 +119,8 @@ def augment_user_prompt(user_prompt: str) -> str:
     """
     stripped = user_prompt.strip()
     lower = stripped.lower()
-    # Pop-specific first (so we can add both if needed)
-    for pattern in POP_PROMPT_PATTERNS:
+    # Pop-specific augmentation (distinct chorus / hook guidance)
+    for pattern in POP_AUGMENTATION_PATTERNS:
         if pattern in lower:
             stripped = stripped + POP_AUGMENTATION_SUFFIX
             break
@@ -126,7 +130,13 @@ def augment_user_prompt(user_prompt: str) -> str:
     return stripped
 
 
-def is_pop_prompt(user_prompt: str) -> bool:
-    """True if the user request implies pop/catchy/chorus/hook (stricter chorus scoring)."""
+def get_pop_prompt_keywords(user_prompt: str) -> List[str]:
+    """Return list of pop-related keywords/phrases found in prompt (for debug and strict pop mode)."""
     lower = user_prompt.strip().lower()
-    return any(p in lower for p in POP_PROMPT_PATTERNS)
+    found = [p for p in POP_PROMPT_STRONG_PATTERNS if p in lower]
+    return list(dict.fromkeys(found))
+
+
+def is_pop_prompt(user_prompt: str) -> bool:
+    """True if the user request clearly implies pop/catchy chorus/hook (stricter chorus scoring). 'Singable' alone does NOT trigger."""
+    return len(get_pop_prompt_keywords(user_prompt)) > 0

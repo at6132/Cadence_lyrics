@@ -32,7 +32,10 @@ def _normalize_section_type(raw: str) -> str:
 
 
 def _normalize_line(s: str) -> str:
-    return " ".join(s.strip().split()).lower()
+    """Normalize for comparison: lowercase, collapse whitespace, strip punctuation."""
+    s = " ".join(s.strip().split()).lower()
+    s = re.sub(r"[^\w\s]", "", s)  # remove punctuation for refrain matching
+    return s.strip()
 
 
 def get_sections(
@@ -80,32 +83,88 @@ def _get_sections(lyrics: str) -> List[tuple]:
     return sections
 
 
-def _infer_chorus_sections(sections: List[tuple]) -> List[List[str]]:
+def _find_repeated_refrains(all_lines: List[str], min_repeats: int = 2) -> Tuple[List[List[str]], List[dict]]:
     """
-    Return list of chorus line lists. Use explicit Chorus/Hook labels as primary; fallback to repeated-block only when no labels.
+    Find 1/2/3/4-line blocks that repeat at least min_repeats times (non-adjacent ok).
+    Ignores punctuation/case when comparing.
+    Returns (list of chorus section line lists, list of candidates with metadata for debug).
+    """
+    if not all_lines:
+        return [], []
+    lines = [l.strip() for l in all_lines if l.strip()]
+    if len(lines) < 2:
+        return [], []
+
+    candidates: List[dict] = []  # {sig, lines, count, occurrences}
+
+    for block_len in range(1, 5):  # 1, 2, 3, 4 line blocks
+        if block_len > len(lines):
+            break
+        sig_to_lines: Dict[str, List[str]] = {}
+        sig_to_count: Dict[str, int] = {}
+        for i in range(len(lines) - block_len + 1):
+            block = lines[i : i + block_len]
+            sig = "\n".join(_normalize_line(l) for l in block)
+            if not sig:
+                continue
+            sig_to_lines[sig] = block
+            sig_to_count[sig] = sig_to_count.get(sig, 0) + 1
+        for sig, count in sig_to_count.items():
+            if count >= min_repeats and sig in sig_to_lines:
+                candidates.append({
+                    "sig": sig,
+                    "lines": sig_to_lines[sig],
+                    "count": count,
+                    "block_len": block_len,
+                })
+    if not candidates:
+        return [], []
+
+    # Best: most repeats, then prefer shorter block, then longer total length (more content)
+    best = max(
+        candidates,
+        key=lambda c: (c["count"], -c["block_len"], sum(len(l) for l in c["lines"])),
+    )
+    # Return one representative block per occurrence (same content each time)
+    block_lines = best["lines"]
+    return [list(block_lines) for _ in range(best["count"])], candidates
+
+
+def _infer_chorus_sections(
+    sections: List[tuple],
+    all_lines_flat: Optional[List[str]] = None,
+) -> Tuple[List[List[str]], List[dict], List[List[str]]]:
+    """
+    Return (chorus_sections, fallback_candidates, chosen_fallback_refrain).
+    Use explicit Chorus/Hook labels as primary; fallback to repeated 1-4 line refrains when no labels.
     """
     explicit = [lines for stype, lines in sections if stype in ("chorus", "hook") and lines]
     if explicit:
-        return explicit
-    # No explicit labels: find the block that repeats most (or is repeated verbatim)
-    blocks = [lines for _, lines in sections if len(lines) >= 2]
-    if not blocks:
-        return []
-    # Normalized text of each block
+        return explicit, [], []
+
+    # No explicit labels: try section-level repeated blocks first (blank-line separated)
+    blocks = [lines for _, lines in sections if len(lines) >= 1]
     block_sigs = ["\n".join(_normalize_line(l) for l in b) for b in blocks]
     counts = Counter(block_sigs)
     best_sig = counts.most_common(1)[0][0] if counts else None
-    if not best_sig or counts[best_sig] < 2:
-        # No repetition: treat shortest block with 2–6 lines as possible chorus
-        candidates = [b for b in blocks if 2 <= len(b) <= 8]
-        if candidates:
-            return [min(candidates, key=lambda x: (sum(len(l) for l in x), -len(x)))]
-        return []
-    # Return the block that repeats (first occurrence's lines)
-    for b in blocks:
-        if "\n".join(_normalize_line(l) for l in b) == best_sig:
-            return [b]
-    return []
+    if best_sig and counts[best_sig] >= 2:
+        for b in blocks:
+            if "\n".join(_normalize_line(l) for l in b) == best_sig:
+                n = counts[best_sig]
+                return [b] * n, [{"block": b, "count": n}], b
+
+    # Scan full line list for repeated 1-4 line refrains (non-adjacent)
+    flat = all_lines_flat or [l for _, lines in sections for l in lines]
+    chorus_sections, fallback_candidates = _find_repeated_refrains(flat, min_repeats=2)
+    if chorus_sections:
+        chosen = chorus_sections[0] if chorus_sections else []
+        return chorus_sections, fallback_candidates, chosen
+    # Last resort: shortest block with 2-6 lines
+    candidates = [b for b in blocks if 2 <= len(b) <= 8]
+    if candidates:
+        b = min(candidates, key=lambda x: (sum(len(l) for l in x), -len(x)))
+        return [b], [], b
+    return [], fallback_candidates, []
 
 
 def _hook_candidates(chorus_lines: List[str], all_lines: List[str]) -> List[str]:
@@ -138,21 +197,54 @@ def _repeat_consistency_score(chorus_sections: List[List[str]]) -> float:
     return min(100.0, 50.0 + 50.0 * matches / len(sigs))
 
 
-def _memorability_score(chorus_lines: List[str], hook_lines: List[str]) -> float:
-    """0–100: presence of short, repeatable hook and concise chorus."""
+def _memorability_score(
+    chorus_lines: List[str],
+    hook_lines: List[str],
+    generic_hook_flags: List[str],
+) -> Tuple[float, Dict[str, float]]:
+    """
+    0–100: shortness/singability, distinctiveness, freshness; repetition helps but isn't enough.
+    Returns (score, components_dict) for debug.
+    """
+    components: Dict[str, float] = {
+        "base": 40.0,
+        "repetition_bonus": 0.0,
+        "short_line_bonus": 0.0,
+        "distinctiveness_bonus": 0.0,
+        "generic_phrase_penalty": 0.0,
+    }
     if not chorus_lines:
-        return 0.0
-    score = 50.0
+        return 0.0, components
+    score = 40.0
     avg_words = sum(len(l.split()) for l in chorus_lines) / len(chorus_lines)
     if avg_words <= 6:
-        score += 20.0
+        score += 15.0
+        components["short_line_bonus"] = 15.0
     elif avg_words <= 9:
-        score += 10.0
+        score += 8.0
+        components["short_line_bonus"] = 8.0
     if hook_lines:
-        score += 25.0
+        score += 12.0
+        components["repetition_bonus"] = 12.0
     if any(len(l.split()) <= 5 for l in chorus_lines):
         score += 5.0
-    return min(100.0, score)
+        components["short_line_bonus"] += 5.0
+    # Distinctiveness: no obvious template words (you, me, love, heart, away, etc.)
+    template_words = {"you", "me", "love", "heart", "away", "stay", "night", "day", "know", "feel"}
+    chorus_words = set()
+    for l in chorus_lines:
+        chorus_words.update(re.findall(r"[a-z]+", _normalize_line(l)))
+    overlap = len(chorus_words & template_words)
+    if overlap <= 2 and len(chorus_words) >= 5:
+        score += 8.0
+        components["distinctiveness_bonus"] = 8.0
+    # Generic/cliché penalty: material reduction when flags present
+    if generic_hook_flags:
+        penalty = min(35.0, 10.0 + len(generic_hook_flags) * 8.0)
+        score -= penalty
+        components["generic_phrase_penalty"] = -penalty
+    components["total"] = score
+    return max(0.0, min(100.0, score)), components
 
 
 def _prose_like(chorus_lines: List[str]) -> bool:
@@ -173,14 +265,16 @@ def analyze_chorus(
     chorus_blacklist: phrases that count as generic in chorus (stronger penalty).
     """
     sections, detected_section_headers = get_sections(lyrics)
-    chorus_sections = _infer_chorus_sections(sections)
+    all_lines = [l for _, lines in sections for l in lines]
+    chorus_sections, fallback_refrain_candidates, chosen_fallback_refrain = _infer_chorus_sections(
+        sections, all_lines_flat=all_lines
+    )
     has_explicit_chorus = any(
         stype in ("chorus", "hook") for stype, _ in sections
     )
     chorus_source = "explicit_labels" if has_explicit_chorus else "fallback_repeated_blocks"
 
-    all_lines = [l for _, lines in sections for l in lines]
-    chorus_lines_flat = [l for c in chorus_sections for l in c] if chorus_sections else []
+    chorus_lines_flat = (chorus_sections[0] if chorus_sections else []) or list(chosen_fallback_refrain or [])
     hook_lines = _hook_candidates(chorus_lines_flat, all_lines) if chorus_lines_flat else []
 
     avg_chorus_line_length = (
@@ -188,15 +282,25 @@ def analyze_chorus(
         if chorus_lines_flat else 0.0
     )
     repeat_consistency = _repeat_consistency_score(chorus_sections)
-    memorability = _memorability_score(chorus_lines_flat, hook_lines)
-    is_prose_like = _prose_like(chorus_lines_flat)
-
-    generic_hook_flags: List[str] = []
+    generic_hook_flags = []
     if chorus_blacklist and chorus_lines_flat:
         chorus_text = " ".join(chorus_lines_flat).lower()
         for phrase in chorus_blacklist:
             if phrase.lower() in chorus_text:
                 generic_hook_flags.append(phrase)
+    memorability, memorability_components = _memorability_score(
+        chorus_lines_flat, hook_lines, generic_hook_flags
+    )
+    is_prose_like = _prose_like(chorus_lines_flat)
+
+    # Debug: fallback candidates (simplified for JSON)
+    fallback_candidates_debug = []
+    for c in fallback_refrain_candidates:
+        fallback_candidates_debug.append({
+            "block_len": c.get("block_len"),
+            "count": c.get("count"),
+            "preview": (c.get("lines", [])[:2] or []) if isinstance(c.get("lines"), list) else [],
+        })
 
     parsed_sections = [{"type": stype, "line_count": len(lines)} for stype, lines in sections]
 
@@ -213,4 +317,7 @@ def analyze_chorus(
         "parsed_sections": parsed_sections,
         "detected_section_headers": detected_section_headers,
         "chorus_source": chorus_source,
+        "fallback_refrain_candidates": fallback_candidates_debug,
+        "chosen_fallback_refrain": chosen_fallback_refrain if chorus_source == "fallback_repeated_blocks" else [],
+        "memorability_score_components": memorability_components,
     }

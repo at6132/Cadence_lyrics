@@ -134,32 +134,56 @@ def chorus_hook_score(
     chorus_analysis: Dict[str, Any],
     chorus_blacklist_matches: List[str],
     config: Optional[dict] = None,
-) -> float:
+    evaluator_line_notes: Optional[List[Dict[str, Any]]] = None,
+) -> tuple:
     """
-    Score 0–100 for chorus/hook quality.
-    Rewards clear chorus, repeatable hook, singable length; penalizes generic/prose-like.
+    Score 0–100 for chorus/hook quality. Cliché/generic choruses cannot reach elite scores.
+    Returns (score, penalties_applied_list) for debug.
     """
     cfg = {**DEFAULT_CONFIG, **(config or {})}
-    score = 50.0
-    if chorus_analysis.get("has_chorus"):
-        score += 20.0
-    else:
-        return max(0.0, score - 20.0)
-    score += chorus_analysis.get("memorability_score", 0) * 0.2
-    score += chorus_analysis.get("repeat_consistency_score", 0) * 0.1
+    penalties_applied: List[str] = []
+    score = 45.0
+    if not chorus_analysis.get("has_chorus"):
+        return max(0.0, score - 25.0), ["no_chorus"]
+    score += 15.0
+    mem = chorus_analysis.get("memorability_score", 0)
+    score += mem * 0.15  # memorability helps but is capped by generic_phrase_penalty inside memorability
+    score += chorus_analysis.get("repeat_consistency_score", 0) * 0.08
     avg_len = chorus_analysis.get("avg_chorus_line_length", 99)
     if avg_len > 0 and avg_len <= 7:
-        score += 10.0
+        score += 8.0
     elif avg_len <= 10:
-        score += 5.0
+        score += 4.0
     if chorus_analysis.get("hook_lines"):
-        score += 10.0
-    score -= len(chorus_blacklist_matches) * cfg["penalty_per_chorus_blacklist_phrase"]
+        score += 6.0
+    # Strong penalty for generic/cliché phrases in chorus
+    n_generic = len(chorus_blacklist_matches)
+    if n_generic > 0:
+        p = n_generic * cfg["penalty_per_chorus_blacklist_phrase"]
+        score -= p
+        penalties_applied.append(f"generic_hook_flags:{n_generic}")
     if chorus_analysis.get("is_prose_like"):
         score -= 15.0
+        penalties_applied.append("prose_like_chorus")
     if not chorus_analysis.get("hook_lines") and chorus_analysis.get("has_chorus"):
         score -= cfg["no_memorable_hook_penalty_pop"]
-    return max(0.0, min(100.0, score))
+        penalties_applied.append("no_memorable_hook")
+    # Evaluator line notes: if any line in chorus is flagged as cliché, penalize
+    if evaluator_line_notes:
+        for note in evaluator_line_notes:
+            probs = note.get("problems") or []
+            if any("cliché" in str(p).lower() or "cliche" in str(p).lower() or "generic" in str(p).lower() for p in probs):
+                score -= 8.0
+                penalties_applied.append("evaluator_cliche_note")
+                break
+    # Cap: chorus with any generic flags cannot exceed 78 unless strong distinctiveness
+    if n_generic > 0:
+        distinctiveness = (chorus_analysis.get("memorability_score_components") or {}).get("distinctiveness_bonus", 0)
+        if distinctiveness < 5.0:
+            score = min(score, 78.0)
+            if score >= 76:
+                penalties_applied.append("capped_due_to_generic_phrases")
+    return max(0.0, min(100.0, score)), penalties_applied
 
 
 def total_score_with_chorus_and_musicality(

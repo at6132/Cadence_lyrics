@@ -43,6 +43,10 @@ DEFAULT_CHORUS_PHRASES = [
     "falling apart", "coming undone", "unraveling", "frayed and worn", "without you here",
     "every little thing reminds me", "everyone's a stranger", "city's still awake",
     "streetlights don't shine as bright", "memory of your touch",
+    "your side of the bed is cold", "hollow space", "empty room without your face",
+    "wide awake missing you", "we're undone", "coming apart", "fraying at the edges",
+    "can't take back what's been said", "without you", "city's still the same",
+    "everything's off without you",
 ]
 
 

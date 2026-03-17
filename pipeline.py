@@ -17,6 +17,7 @@ from prompts import (
     CRITIC_SYSTEM_PROMPT,
     augment_user_prompt,
     is_pop_prompt,
+    get_pop_prompt_keywords,
 )
 from phrase_blacklist import load_blacklist, load_chorus_blacklist, match_phrases, heuristic_flags
 from scoring import (
@@ -281,12 +282,16 @@ def run_pipeline(
             ev_sc = float(eval_dict["score"])
         chorus_an = analyze_chorus(lyrics, chorus_blacklist)
         chorus_bl_matches = chorus_an.get("generic_hook_flags", [])
-        ch_sc = score_chorus_hook(chorus_an, chorus_bl_matches, score_cfg)
+        eval_notes = (eval_dict or {}).get("line_notes")
+        ch_sc, chorus_penalties = score_chorus_hook(
+            chorus_an, chorus_bl_matches, score_cfg, evaluator_line_notes=eval_notes
+        )
         mus_an = analyze_musicality(lyrics)
         mus_sc = mus_an.get("musicality_score", 50.0)
         total, breakdown = total_score_with_chorus_and_musicality(
             rule_sc, ev_sc, ch_sc, mus_sc, is_pop, chorus_an, score_cfg
         )
+        breakdown["chorus_score_penalties_applied"] = chorus_penalties
         return total, breakdown, chorus_an, mus_an
 
     # Step A: Draft (streamed)
@@ -365,6 +370,7 @@ def run_pipeline(
     if debug or run_log_dir:
         debug_extra = {
             "is_pop_prompt": is_pop,
+            "pop_mode_keywords_matched": get_pop_prompt_keywords(user_prompt),
             "draft_chorus_analysis": draft_chorus_analysis,
             "draft_musicality_analysis": draft_musicality,
             "draft_score_breakdown": draft_breakdown,

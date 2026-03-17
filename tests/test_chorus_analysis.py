@@ -188,10 +188,56 @@ def test_fallback_when_no_labels():
     sections, headers = get_sections(EXAMPLE_NO_LABELS)
     assert headers == []
     assert len(sections) == 2  # two blocks
-    chorus_sections = _infer_chorus_sections(sections)
+    chorus_sections, _, _ = _infer_chorus_sections(sections)
     # Repeated block should be inferred as chorus
     assert len(chorus_sections) >= 1
     out = analyze_chorus(EXAMPLE_NO_LABELS)
+    assert out["chorus_source"] == "fallback_repeated_blocks"
+    assert out["has_chorus"] is True
+    assert out["chorus_sections_found"] >= 1
+    assert len(out["chorus_lines"]) >= 2
+
+
+# --- Unlabeled repeated refrain (non-adjacent) ---
+EXAMPLE_REFRAIN_SEPARATED = """I went down to the corner store
+You were not there anymore
+
+We used to dance
+We used to dance
+
+I drove past your street at night
+The lights were off and that's right
+
+We used to dance
+We used to dance
+"""
+
+
+def test_fallback_refrain_non_adjacent():
+    out = analyze_chorus(EXAMPLE_REFRAIN_SEPARATED)
+    assert out["has_chorus"] is True
+    assert out["chorus_sections_found"] >= 2
+    assert out["chorus_source"] == "fallback_repeated_blocks"
+    assert "We used to dance" in out["chorus_lines"] or any("dance" in l for l in out["chorus_lines"])
+    assert out.get("chosen_fallback_refrain") or out["chorus_lines"]
+
+
+def test_fallback_refrain_punctuation_variant():
+    # Slight punctuation/case difference should still match
+    lyrics = """First verse line
+Second verse line
+
+Don't go away
+dont go away
+
+Third verse
+Fourth verse
+
+Don't go away
+dont go away
+"""
+    out = analyze_chorus(lyrics)
+    assert out["has_chorus"] is True
     assert out["chorus_source"] == "fallback_repeated_blocks"
 
 
