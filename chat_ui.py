@@ -70,6 +70,25 @@ def _phase_title(phase: str) -> str:
     return phase or "…"
 
 
+class _StreamPanel:
+    """Mutable renderable for Live: updates phase/text and renders as a Panel."""
+
+    def __init__(self) -> None:
+        self.phase = "draft"
+        self.text = ""
+
+    def __rich_console__(self, console: Console, options) -> None:
+        title = _phase_title(self.phase)
+        content = (self.text or "").strip() or "[dim]…[/dim]"
+        yield Panel(
+            content,
+            title=title,
+            border_style="green",
+            padding=(1, 2),
+            expand=False,
+        )
+
+
 def show_lyrics(lyrics: str, *, debug: bool = False, debug_data: Optional[dict] = None) -> None:
     """Render lyrics in a panel; if debug, show score and meta below."""
     content = lyrics.strip() or "[dim](no lyrics generated)[/dim]"
@@ -138,26 +157,15 @@ def run_chat() -> None:
             banner()
             continue
 
-        # Generate with streaming live panel
-        stream_state: dict = {"phase": "draft", "text": ""}
+        # Generate with streaming live panel (mutable renderable for Rich compatibility)
+        stream_panel = _StreamPanel()
 
         def stream_cb(phase: str, text: str) -> None:
-            stream_state["phase"] = phase
-            stream_state["text"] = text or ""
-
-        def render_stream() -> Panel:
-            title = _phase_title(stream_state["phase"])
-            content = (stream_state["text"] or "").strip() or "[dim]…[/dim]"
-            return Panel(
-                content,
-                title=title,
-                border_style="green",
-                padding=(1, 2),
-                expand=False,
-            )
+            stream_panel.phase = phase
+            stream_panel.text = text or ""
 
         with Live(
-            render_stream,
+            stream_panel,
             console=console,
             refresh_per_second=12,
         ):
@@ -169,8 +177,8 @@ def run_chat() -> None:
             )
             # Show final result in the same panel briefly
             final_text = result.get("final_lyrics", result) if isinstance(result, dict) else result
-            stream_state["phase"] = "done"
-            stream_state["text"] = final_text
+            stream_panel.phase = "done"
+            stream_panel.text = final_text
 
         if debug_mode and isinstance(result, dict):
             show_lyrics(
