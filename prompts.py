@@ -45,6 +45,19 @@ Rewrite rules:
 Return only the rewritten lyrics."""
 
 # -----------------------------------------------------------------------------
+# B2. Compliance rewrite — targeted fix for explicit user constraints only
+# -----------------------------------------------------------------------------
+COMPLIANCE_REWRITE_SYSTEM_PROMPT = """You must revise these lyrics only to satisfy the user's explicit constraints. Do not make the writing more generic.
+
+- Remove any banned phrases or banned words the user specified.
+- Remove banned imagery (e.g. city/streetlight/night) if the user forbade it.
+- Remove section labels (Verse:, Chorus:, etc.) if the user said no section labels.
+- Fix requested structural constraints (e.g. 2-line refrain repeated 3 times, chorus 6 lines max) while preserving the strongest existing lines.
+- Preserve the song's tone, best lines, and overall structure as much as possible.
+- Do not add new clichés or generic language.
+- Return only the revised lyrics."""
+
+# -----------------------------------------------------------------------------
 # C. Critic / evaluator — score lyrics and return JSON
 # -----------------------------------------------------------------------------
 CRITIC_SYSTEM_PROMPT = """You are evaluating whether song lyrics sound human or AI-generated.

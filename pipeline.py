@@ -14,6 +14,7 @@ from typing import Optional, Callable, Union, List
 from prompts import (
     DRAFT_SYSTEM_PROMPT,
     REWRITE_SYSTEM_PROMPT,
+    COMPLIANCE_REWRITE_SYSTEM_PROMPT,
     CRITIC_SYSTEM_PROMPT,
     augment_user_prompt,
     is_pop_prompt,
@@ -30,6 +31,7 @@ from scoring import (
 )
 from utils.chorus_analysis import analyze_chorus
 from utils.musicality_analysis import analyze_musicality
+from utils.prompt_constraints import extract_constraints, validate_lyrics_against_constraints, is_chorus_only_prompt
 
 # Pipeline config (1 rewrite only; pick best of draft vs rewrite_1 at the end)
 PIPELINE_CONFIG = {
@@ -244,6 +246,24 @@ def run_rewrite(
     ).strip()
 
 
+def run_compliance_rewrite(
+    lyrics: str,
+    user_prompt: str,
+    constraints_summary: str,
+    config: Optional[dict] = None,
+) -> str:
+    """Targeted rewrite to satisfy explicit user constraints only. Preserves song as much as possible."""
+    cfg = {**PIPELINE_CONFIG, **(config or {})}
+    prompt = f"User request:\n{user_prompt}\n\nUser's explicit constraints to satisfy:\n{constraints_summary}\n\nLyrics to revise:\n\n{lyrics}"
+    return _call_model(
+        prompt,
+        COMPLIANCE_REWRITE_SYSTEM_PROMPT,
+        max_new_tokens=cfg.get("rewrite_max_tokens", 550),
+        temperature=0.4,
+        stream_callback=None,
+    ).strip()
+
+
 def run_pipeline(
     user_prompt: str,
     *,
@@ -264,15 +284,18 @@ def run_pipeline(
     blacklist = load_blacklist()
     chorus_blacklist = load_chorus_blacklist()
     is_pop = is_pop_prompt(user_prompt)
+    extracted_constraints = extract_constraints(user_prompt)
+    chorus_only_prompt = is_chorus_only_prompt(extracted_constraints)
     eval_history: List[Optional[dict]] = []
     score_history: List[float] = []
     rewrite_weakened_chorus = False
+    CONSTRAINT_VIOLATION_PENALTY = 35.0
 
     def cb(phase: str, text: str = "") -> None:
         if stream_callback:
             stream_callback(phase, text)
 
-    def score_candidate(lyrics: str, eval_dict: Optional[dict]) -> tuple:
+    def score_candidate(lyrics: str, eval_dict: Optional[dict], chorus_only: bool = False) -> tuple:
         """Returns (total_score, breakdown, chorus_analysis, musicality_analysis)."""
         banned_c = match_phrases(lyrics, blacklist)
         heur_c = heuristic_flags(lyrics)
@@ -287,11 +310,13 @@ def run_pipeline(
         ch_sc, chorus_debug = score_chorus_hook(
             chorus_an, chorus_bl_matches, score_cfg, evaluator_line_notes=eval_notes,
             evaluator_score=ev_sc, is_pop_prompt=is_pop, evaluator_issues=eval_issues,
+            chorus_only_prompt=chorus_only,
         )
         mus_an = analyze_musicality(lyrics)
         mus_sc = mus_an.get("musicality_score", 50.0)
         total, breakdown = total_score_with_chorus_and_musicality(
-            rule_sc, ev_sc, ch_sc, mus_sc, is_pop, chorus_an, score_cfg
+            rule_sc, ev_sc, ch_sc, mus_sc, is_pop, chorus_an, score_cfg,
+            chorus_only_prompt=chorus_only,
         )
         breakdown["chorus_score_penalties_applied"] = chorus_debug.get("penalties_applied", [])
         breakdown["chorus_lines_flagged_by_evaluator"] = chorus_debug.get("chorus_lines_flagged_by_evaluator", [])
@@ -305,6 +330,7 @@ def run_pipeline(
         breakdown["chorus_boundary_reason"] = chorus_an.get("chorus_boundary_reason") or None
         breakdown["unlabeled_verse_after_chorus_detected"] = chorus_an.get("unlabeled_verse_after_chorus_detected", False)
         breakdown["chorus_compact_block_chosen"] = chorus_an.get("chorus_compact_block_chosen") or []
+        breakdown["chorus_only_cap_applied"] = chorus_debug.get("chorus_only_cap_applied", False)
         return total, breakdown, chorus_an, mus_an
 
     # Step A: Draft (streamed)
@@ -320,13 +346,15 @@ def run_pipeline(
     cb("evaluating", "")
     eval_result = run_evaluator(draft, config=cfg)
     eval_history.append(eval_result)
-    draft_total, draft_breakdown, draft_chorus_analysis, draft_musicality = score_candidate(draft, eval_result)
+    draft_total, draft_breakdown, draft_chorus_analysis, draft_musicality = score_candidate(draft, eval_result, chorus_only_prompt)
     score_history.append(draft_total)
+    draft_constraint_passed, draft_violations, draft_structure_result = validate_lyrics_against_constraints(draft, extracted_constraints)
+    draft_selection_score = draft_total - (CONSTRAINT_VIOLATION_PENALTY if not draft_constraint_passed else 0.0)
 
-    # Candidates: (lyrics, selection_score, total_score, breakdown, chorus_analysis, musicality_analysis, eval_result, is_draft, rewrite_weakened_chorus)
+    # Candidates: (lyrics, selection_score, total_score, breakdown, chorus_analysis, musicality_analysis, eval_result, is_draft, rewrite_weakened_chorus, constraint_passed, constraint_violations, structure_validation_result)
     WEAKENED_CHORUS_PENALTY = 15.0
     candidates: List[tuple] = [
-        (draft, draft_total, draft_total, draft_breakdown, draft_chorus_analysis, draft_musicality, eval_result, True, False)
+        (draft, draft_selection_score, draft_total, draft_breakdown, draft_chorus_analysis, draft_musicality, eval_result, True, False, draft_constraint_passed, draft_violations, draft_structure_result)
     ]
     rewrite_history: List[str] = []
     rewrite_chorus_analyses: List[dict] = []
@@ -349,11 +377,12 @@ def run_pipeline(
         heur_cur = heuristic_flags(current)
         eval_cur = run_evaluator(current, config=cfg)
         eval_history.append(eval_cur)
-        cur_total, cur_breakdown, cur_chorus, cur_musicality = score_candidate(current, eval_cur)
+        cur_total, cur_breakdown, cur_chorus, cur_musicality = score_candidate(current, eval_cur, chorus_only_prompt)
         score_history.append(cur_total)
         rewrite_chorus_analyses.append(cur_chorus)
         rewrite_musicality_analyses.append(cur_musicality)
         rewrite_breakdowns.append(cur_breakdown)
+        cur_constraint_passed, cur_violations, cur_structure_result = validate_lyrics_against_constraints(current, extracted_constraints)
 
         # Did rewrite weaken chorus vs draft?
         weakened = (
@@ -362,27 +391,76 @@ def run_pipeline(
         )
         if weakened:
             rewrite_weakened_chorus = True
-        selection_score = cur_total - (WEAKENED_CHORUS_PENALTY if weakened else 0.0)
+        selection_score = cur_total - (WEAKENED_CHORUS_PENALTY if weakened else 0.0) - (CONSTRAINT_VIOLATION_PENALTY if not cur_constraint_passed else 0.0)
         candidates.append((
             current, selection_score, cur_total, cur_breakdown, cur_chorus, cur_musicality,
-            eval_cur, False, weakened,
+            eval_cur, False, weakened, cur_constraint_passed, cur_violations, cur_structure_result,
         ))
         passes_used += 1
         if passed_threshold_with_pop(cur_total, is_pop, cur_chorus, cur_breakdown.get("chorus_hook_score", 0), score_cfg) and not match_phrases(current, blacklist):
             break
 
-    # Pick best by selection_score (total minus penalty if rewrite weakened chorus)
+    # Pick best by selection_score (total minus penalty if rewrite weakened chorus or constraint violation)
     best = max(candidates, key=lambda c: c[1])
     best_lyrics = best[0]
     best_score = best[2]
     best_breakdown = best[3]
     best_eval_result = best[6]
+    best_constraint_passed = best[9]
+    best_violations = best[10]
+    best_structure_result = best[11]
+    compliance_rewrite_used = False
+    final_selection_reason = "highest selection score (draft vs rewrite)"
+
+    # If best candidate violates constraints, try one compliance rewrite
+    if not best_constraint_passed and (extracted_constraints.get("banned_phrases") or extracted_constraints.get("section_rules") or extracted_constraints.get("required_structure")):
+        constraints_summary_parts = []
+        if extracted_constraints.get("banned_phrases"):
+            constraints_summary_parts.append("Banned phrases: " + ", ".join(extracted_constraints["banned_phrases"][:15]))
+        if extracted_constraints.get("banned_words"):
+            constraints_summary_parts.append("Banned words: " + ", ".join(extracted_constraints["banned_words"][:20]))
+        if extracted_constraints.get("section_rules", {}).get("no_section_labels"):
+            constraints_summary_parts.append("No section labels (no Verse:, Chorus:, etc.)")
+        if extracted_constraints.get("required_structure"):
+            constraints_summary_parts.append("Required structure: " + str(extracted_constraints["required_structure"]))
+        if extracted_constraints.get("line_limits"):
+            constraints_summary_parts.append("Line limits: " + str(extracted_constraints["line_limits"]))
+        constraints_summary = "\n".join(constraints_summary_parts)
+        compliance_lyrics = run_compliance_rewrite(best_lyrics, user_prompt, constraints_summary, cfg)
+        compliance_lyrics = _dedupe_lines(compliance_lyrics)
+        comp_passed, comp_violations, comp_structure = validate_lyrics_against_constraints(compliance_lyrics, extracted_constraints)
+        if comp_passed or len(comp_violations) < len(best_violations):
+            comp_eval = run_evaluator(compliance_lyrics, config=cfg)
+            comp_total, comp_breakdown, comp_chorus, comp_musicality = score_candidate(compliance_lyrics, comp_eval, chorus_only_prompt)
+            comp_selection = comp_total - (CONSTRAINT_VIOLATION_PENALTY if not comp_passed else 0.0)
+            if comp_passed or comp_selection > best[1]:
+                best_lyrics = compliance_lyrics
+                best_score = comp_total
+                best_breakdown = comp_breakdown
+                best_eval_result = comp_eval
+                best_constraint_passed = comp_passed
+                best_violations = comp_violations
+                best_structure_result = comp_structure
+                compliance_rewrite_used = True
+                final_selection_reason = "compliance_rewrite_used_after_violations" if comp_passed else "compliance_rewrite_improved_violations"
+
     banned_final = match_phrases(best_lyrics, blacklist)
 
     debug_extra = None
     if debug or run_log_dir:
         debug_extra = {
             "is_pop_prompt": is_pop,
+            "chorus_only_prompt": chorus_only_prompt,
+            "extracted_prompt_constraints": extracted_constraints,
+            "constraint_violations": best_violations,
+            "constraint_passed": best_constraint_passed,
+            "structure_constraints_detected": extracted_constraints.get("required_structure") or {},
+            "structure_validation_result": best_structure_result,
+            "chorus_only_cap_applied": best_breakdown.get("chorus_only_cap_applied", False),
+            "compliance_rewrite_used": compliance_rewrite_used,
+            "final_selection_reason": final_selection_reason,
+            "constraint_penalty_applied": not best_constraint_passed,
+            "structure_penalty_applied": not (best_structure_result.get("passed", True)),
             "pop_mode_keywords_matched": get_pop_prompt_keywords(user_prompt),
             "draft_chorus_analysis": draft_chorus_analysis,
             "draft_musicality_analysis": draft_musicality,
@@ -428,6 +506,17 @@ def run_pipeline(
             "rewrite_score_breakdown": rewrite_breakdowns[0] if rewrite_breakdowns else None,
             "rewrite_weakened_chorus": rewrite_weakened_chorus,
             "final_score_breakdown": best_breakdown,
+            "extracted_prompt_constraints": extracted_constraints,
+            "constraint_violations": best_violations,
+            "constraint_passed": best_constraint_passed,
+            "structure_constraints_detected": extracted_constraints.get("required_structure") or {},
+            "structure_validation_result": best_structure_result,
+            "chorus_only_prompt": chorus_only_prompt,
+            "chorus_only_cap_applied": best_breakdown.get("chorus_only_cap_applied", False),
+            "compliance_rewrite_used": compliance_rewrite_used,
+            "final_selection_reason": final_selection_reason,
+            "constraint_penalty_applied": not best_constraint_passed,
+            "structure_penalty_applied": not (best_structure_result.get("passed", True)),
         }
     return best_lyrics
 

@@ -42,6 +42,9 @@ DEFAULT_CONFIG = {
     "evaluator_low_bonus_multiplier": 0.4,
     "chorus_cap_multiple_template": 55.0,
     "penalty_per_template_hook_flag": 5,
+    "chorus_only_generic_cap": 50.0,
+    "chorus_only_low_evaluator_cap": 55.0,
+    "chorus_only_template_penalty_multiplier": 1.5,
 }
 
 
@@ -207,6 +210,7 @@ def chorus_hook_score(
     evaluator_score: Optional[float] = None,
     is_pop_prompt: bool = False,
     evaluator_issues: Optional[Any] = None,
+    chorus_only_prompt: bool = False,
 ) -> tuple:
     """
     Score 0–100 for chorus/hook quality. Short repeated cliché choruses are capped well below elite.
@@ -224,6 +228,7 @@ def chorus_hook_score(
         "evaluator_low_score_cap_applied": False,
         "evaluator_low_score_cap_value": None,
         "chorus_penalty_reason_details": [],
+        "chorus_only_cap_applied": False,
     }
     score = 45.0
     if not chorus_analysis.get("has_chorus"):
@@ -256,7 +261,8 @@ def chorus_hook_score(
         penalties_applied.append(f"generic_hook_flags:{n_generic}")
         penalty_reason_details.append("generic_hook_flags")
     if n_template > 0:
-        p_template = n_template * cfg["penalty_per_template_hook_flag"]
+        mult = cfg["chorus_only_template_penalty_multiplier"] if chorus_only_prompt else 1.0
+        p_template = n_template * cfg["penalty_per_template_hook_flag"] * mult
         score -= p_template
         penalties_applied.append(f"template_hook_flags:{n_template}")
         penalty_reason_details.append("stock_pop_hook_family")
@@ -331,6 +337,13 @@ def chorus_hook_score(
     elif n_template >= 1 or n_generic >= 1:
         score = min(score, cap_55)
         debug["chorus_score_cap_reason"] = "template_or_generic_single"
+
+    if chorus_only_prompt and (n_generic > 0 or n_template > 0):
+        cap_co = cfg["chorus_only_generic_cap"]
+        score = min(score, cap_co)
+        debug["chorus_score_cap_reason"] = debug.get("chorus_score_cap_reason") or "chorus_only_generic_cap"
+        debug["chorus_only_cap_applied"] = True
+
     debug["chorus_penalty_reason_details"] = list(dict.fromkeys(penalty_reason_details))
     if debug["chorus_score_cap_reason"] and not debug["evaluator_low_score_cap_applied"]:
         penalties_applied.append(debug["chorus_score_cap_reason"])
@@ -346,6 +359,7 @@ def total_score_with_chorus_and_musicality(
     is_pop_prompt: bool,
     chorus_analysis: Dict[str, Any],
     config: Optional[dict] = None,
+    chorus_only_prompt: bool = False,
 ) -> tuple:
     """
     Returns (total_score, breakdown_dict).
@@ -386,6 +400,13 @@ def total_score_with_chorus_and_musicality(
             final_score_cap_reason = "pop_prompt_low_evaluator_cap_with_generic_chorus" if has_generic_chorus else "pop_prompt_low_evaluator_cap"
             evaluator_low_cap_applied = True
             evaluator_low_cap_value = cap
+    if chorus_only_prompt and evaluator_score is not None and evaluator_score <= 50:
+        cap_co = cfg["chorus_only_low_evaluator_cap"]
+        if total > cap_co:
+            total = cap_co
+            final_score_cap_reason = final_score_cap_reason or "chorus_only_low_evaluator_cap"
+            evaluator_low_cap_applied = True
+            evaluator_low_cap_value = min(evaluator_low_cap_value or 100, cap_co)
     breakdown = {
         "realism_score": round(realism_score, 1),
         "evaluator_score": round(ev, 1) if ev is not None else None,

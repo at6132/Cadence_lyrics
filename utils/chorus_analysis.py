@@ -297,11 +297,14 @@ def _memorability_score(
 
 # Phrase families: exact phrases that signal stock hooks (in addition to blacklist)
 CHORUS_PHRASE_FAMILY_EXACT = [
-    "driving separate cars", "same streets", "same old town", "same town", "same place",
-    "can we start again", "can we try again", "start fresh", "walk back in", "waiting back home",
-    "faces in the crowd", "no familiar sound", "find my way back home", "trying to find my way back",
-    "not the same from here", "where did we lose our way", "your side of the bed",
-    "pillow still holds", "still holds the shape", "empty instead", "feels empty instead",
+    "driving separate cars", "driving home", "same streets", "same old town", "same town", "same place",
+    "city at night", "city lights", "can't escape", "your memory stays",
+    "can we start again", "can we try again", "start fresh", "start again", "try again", "come back home",
+    "walk back in", "waiting back home", "find my way back home", "way back home", "trying to find my way back",
+    "where did we lose our way", "your side of the bed", "pillow still holds", "still holds the shape",
+    "empty instead", "feels empty instead", "silence is a heavy thing",
+    "faces in the crowd", "no familiar sound", "without you here",
+    "everything feels the same", "not the same", "not the same from here",
 ]
 # Pattern families: (regex_pattern, label) for stock structures. Case-insensitive.
 CHORUS_PHRASE_FAMILY_PATTERNS = [
@@ -311,6 +314,9 @@ CHORUS_PHRASE_FAMILY_PATTERNS = [
     (re.compile(r"\w+\s+still\s+(holds?|is|was)\b", re.I), "template: [noun] still [holds/is]"),
     (re.compile(r"find my way back", re.I), "template: find my way back"),
     (re.compile(r"trying to find my way", re.I), "template: trying to find my way back"),
+    (re.compile(r"way back (home|to you|to us)\b", re.I), "template: way back home/to you"),
+    (re.compile(r"(city|streetlight|streetlights|city lights|city at night)\b.*\b(undone|missing|without you|alone|falling|breaking)", re.I), "template: city/night + emotional"),
+    (re.compile(r"driving\b.*\b(memory|road|town|street)", re.I), "template: driving + memory/road/town"),
 ]
 
 
