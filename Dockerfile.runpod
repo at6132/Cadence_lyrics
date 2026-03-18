@@ -1,0 +1,32 @@
+# RunPod serverless worker for the lyric pipeline.
+# Build with your adapters included, or mount adapters at runtime.
+# Base: CUDA + Python for transformers/bitsandbytes GPU inference.
+FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 \
+    python3-pip \
+    python3.10-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python deps (use requirements-runpod which includes runpod + base requirements)
+COPY requirements.txt requirements-runpod.txt ./
+RUN pip install --no-cache-dir -r requirements-runpod.txt
+
+# Copy full app (prompts, pipeline, generate, config, utils, data)
+COPY config.py generate.py pipeline.py prompts.py phrase_blacklist.py scoring.py runpod_handler.py ./
+COPY utils ./utils
+COPY data ./data
+# Include your trained LoRA adapter: ensure Lyric_model/adapters/lyric-human/ exists before building
+COPY adapters ./adapters
+
+# Optional: set Hugging Face token at runtime via RunPod env
+ENV HUGGING_FACE_HUB_TOKEN=""
+# Optional: use 4xA100 preset for larger model (e.g. 70B)
+# ENV LYRIC_DEVICE=4xa100
+
+# RunPod serverless runs the handler; it will load the model on first request
+CMD ["python", "-u", "runpod_handler.py"]

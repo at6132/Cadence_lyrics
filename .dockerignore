@@ -1,0 +1,16 @@
+# Exclude from Docker build context (keep image smaller)
+.git
+.gitignore
+*.md
+!DEPLOY_RUNPOD.md
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+checkpoints
+run_logs
+*.log
+.env
+.env.*
+# Keep adapters/ so they are copied into the image
