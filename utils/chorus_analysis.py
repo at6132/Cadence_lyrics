@@ -38,6 +38,51 @@ def _normalize_line(s: str) -> str:
     return s.strip()
 
 
+def _trim_chorus_boundary(
+    sections: List[Tuple[str, List[str]]],
+) -> Tuple[List[Tuple[str, List[str]]], Dict[str, Any]]:
+    """
+    When a Chorus/Hook section has many lines, detect if trailing lines are verse-like
+    (longer, narrative) and split so chorus only keeps the compact repeated block.
+    Returns (new_sections, debug_dict) with chorus_boundary_reason, unlabeled_verse_after_chorus_detected,
+    chorus_compact_block_chosen.
+    """
+    debug: Dict[str, Any] = {
+        "chorus_boundary_reason": "",
+        "unlabeled_verse_after_chorus_detected": False,
+        "chorus_compact_block_chosen": [],
+    }
+    new_sections: List[Tuple[str, List[str]]] = []
+    for stype, lines in sections:
+        if stype not in ("chorus", "hook") or len(lines) <= 2:
+            new_sections.append((stype, lines))
+            continue
+        # Try to find split: compact block (2-4 short lines) then longer narrative.
+        # Prefer smallest k so we keep only the repeated hook, not verse.
+        found = False
+        for k in [2, 3, 4]:
+            if k >= len(lines):
+                continue
+            block = lines[0:k]
+            rest = lines[k:]
+            avg_block = sum(len(l.split()) for l in block) / len(block)
+            avg_rest = sum(len(l.split()) for l in rest) / len(rest) if rest else 0
+            long_rest = any(len(l.split()) > 12 for l in rest)
+            if avg_block <= 9 and rest and (avg_rest >= 8 or long_rest):
+                new_sections.append((stype, block))
+                new_sections.append(("block", rest))
+                debug["chorus_boundary_reason"] = (
+                    f"compact repeated {len(block)}-line chorus followed by longer narrative lines"
+                )
+                debug["unlabeled_verse_after_chorus_detected"] = True
+                debug["chorus_compact_block_chosen"] = list(block)
+                found = True
+                break
+        if not found:
+            new_sections.append((stype, lines))
+    return new_sections, debug
+
+
 def get_sections(
     lyrics: str,
 ) -> Tuple[List[Tuple[str, List[str]]], List[str]]:
@@ -269,6 +314,14 @@ def _chorus_template_flags(chorus_lines: List[str]) -> List[str]:
     # Familiar breakup rhyme/emotion combos
     if "losing the fight" in text or "can't escape" in text or "coming apart" in text:
         flags.append("template: breakup/escape trope")
+    # "Where did we go wrong" / "lose our way" + bed/warm
+    if ("where did we go wrong" in text or "where did we lose our way" in text) or (
+        "your side of the bed" in text and ("still warm" in text or "warm" in text)
+    ):
+        flags.append("template: where did we lose our way / side of the bed")
+    # Wire cut / we're undone style
+    if "like a wire cut" in text or ("wire cut" in text and "undone" in text):
+        flags.append("template: wire cut / undone")
     return flags
 
 
@@ -288,8 +341,10 @@ def analyze_chorus(
     """
     Analyze lyrics for chorus/hook presence and quality.
     chorus_blacklist: phrases that count as generic in chorus (stronger penalty).
+    Trims chorus boundaries when unlabeled verse lines follow a compact chorus block.
     """
     sections, detected_section_headers = get_sections(lyrics)
+    sections, boundary_debug = _trim_chorus_boundary(sections)
     all_lines = [l for _, lines in sections for l in lines]
     chorus_sections, fallback_refrain_candidates, chosen_fallback_refrain, fallback_block_selection_reason = _infer_chorus_sections(
         sections, all_lines_flat=all_lines
@@ -349,4 +404,7 @@ def analyze_chorus(
         "chosen_fallback_refrain": chosen_fallback_refrain if chorus_source == "fallback_repeated_blocks" else [],
         "fallback_block_selection_reason": fallback_block_selection_reason if chorus_source == "fallback_repeated_blocks" else "",
         "memorability_score_components": memorability_components,
+        "chorus_boundary_reason": boundary_debug.get("chorus_boundary_reason", ""),
+        "unlabeled_verse_after_chorus_detected": boundary_debug.get("unlabeled_verse_after_chorus_detected", False),
+        "chorus_compact_block_chosen": boundary_debug.get("chorus_compact_block_chosen", []),
     }

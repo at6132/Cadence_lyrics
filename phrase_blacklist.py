@@ -52,6 +52,10 @@ DEFAULT_CHORUS_PHRASES = [
     "missing you under these streetlights", "alone in the dark", "every mile feels like a mistake",
     "wrong turn", "ghost in my head", "city lights blurring by", "still the same",
     "just two people in a crowded room", "out of sync", "out of place",
+    # Stricter cliché refinement
+    "where did we go wrong", "where did we lose our way",
+    "your side of the bed is still warm", "your side of the bed, still warm",
+    "like a wire cut", "say my name, say it's okay", "come back home tonight",
 ]
 
 

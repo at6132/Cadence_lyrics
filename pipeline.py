@@ -284,7 +284,8 @@ def run_pipeline(
         chorus_bl_matches = chorus_an.get("generic_hook_flags", [])
         eval_notes = (eval_dict or {}).get("line_notes")
         ch_sc, chorus_debug = score_chorus_hook(
-            chorus_an, chorus_bl_matches, score_cfg, evaluator_line_notes=eval_notes
+            chorus_an, chorus_bl_matches, score_cfg, evaluator_line_notes=eval_notes,
+            evaluator_score=ev_sc, is_pop_prompt=is_pop,
         )
         mus_an = analyze_musicality(lyrics)
         mus_sc = mus_an.get("musicality_score", 50.0)
@@ -296,6 +297,9 @@ def run_pipeline(
         breakdown["evaluator_chorus_penalty_applied"] = chorus_debug.get("evaluator_chorus_penalty_applied", False)
         breakdown["chorus_score_cap_reason"] = chorus_debug.get("chorus_score_cap_reason") or None
         breakdown["fallback_block_selection_reason"] = chorus_an.get("fallback_block_selection_reason") or None
+        breakdown["chorus_boundary_reason"] = chorus_an.get("chorus_boundary_reason") or None
+        breakdown["unlabeled_verse_after_chorus_detected"] = chorus_an.get("unlabeled_verse_after_chorus_detected", False)
+        breakdown["chorus_compact_block_chosen"] = chorus_an.get("chorus_compact_block_chosen") or []
         return total, breakdown, chorus_an, mus_an
 
     # Step A: Draft (streamed)

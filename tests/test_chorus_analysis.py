@@ -16,6 +16,7 @@ from utils.chorus_analysis import (
     _get_sections,
     _infer_chorus_sections,
     _find_repeated_refrains,
+    _trim_chorus_boundary,
 )
 
 
@@ -310,6 +311,53 @@ Like a wire cut, the signal's gone
     assert len(sections[0]) >= 2
     assert "undone" in sections[0][0].lower()
     assert "wire" in sections[0][1].lower() or "signal" in sections[0][1].lower()
+
+
+# --- Unlabeled verse after chorus: trim so chorus does not swallow verse ---
+# No blank line between refrain and verse so parser initially assigns all to chorus
+EXAMPLE_UNLABELED_VERSE_AFTER_CHORUS = """First verse line here
+Another verse line
+
+Chorus:
+Oh we're undone
+Like a wire cut we're undone
+I drove past your street last Tuesday night
+The lights were off and we never said goodbye
+She told me something that I can't forget
+
+Chorus:
+Oh we're undone
+Like a wire cut we're undone
+"""
+
+
+def test_unlabeled_verse_after_chorus_not_in_chorus_lines():
+    out = analyze_chorus(EXAMPLE_UNLABELED_VERSE_AFTER_CHORUS)
+    assert out["has_chorus"] is True
+    assert out["chorus_source"] == "explicit_labels"
+    # Chorus should be only the 2-line refrain, not the 3 narrative lines
+    assert len(out["chorus_lines"]) == 2
+    assert "Oh we're undone" in out["chorus_lines"][0] or "undone" in out["chorus_lines"][0].lower()
+    assert "wire cut" in " ".join(out["chorus_lines"]).lower()
+    assert "I drove past" not in out["chorus_lines"]
+    assert "She told me" not in out["chorus_lines"]
+    assert out.get("unlabeled_verse_after_chorus_detected") is True
+    assert out.get("chorus_boundary_reason", "")
+    assert out.get("chorus_compact_block_chosen") == out["chorus_lines"]
+
+
+def test_trim_chorus_boundary_splits_chorus_then_verse():
+    sections, _ = get_sections(EXAMPLE_UNLABELED_VERSE_AFTER_CHORUS)
+    trimmed, debug = _trim_chorus_boundary(sections)
+    assert debug["unlabeled_verse_after_chorus_detected"] is True
+    assert len(debug["chorus_compact_block_chosen"]) == 2
+    # First chorus section in trimmed should be 2 lines; then a block with the 3 verse lines
+    chorus_sections = [lines for stype, lines in trimmed if stype == "chorus"]
+    assert len(chorus_sections) == 2
+    assert chorus_sections[0] == ["Oh we're undone", "Like a wire cut we're undone"]
+    assert chorus_sections[1] == ["Oh we're undone", "Like a wire cut we're undone"]
+    blocks = [lines for stype, lines in trimmed if stype == "block"]
+    assert any("I drove past" in " ".join(b) for b in blocks)
 
 
 # --- Back-compat _get_sections ---
