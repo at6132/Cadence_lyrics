@@ -56,6 +56,11 @@ DEFAULT_CHORUS_PHRASES = [
     "where did we go wrong", "where did we lose our way",
     "your side of the bed is still warm", "your side of the bed, still warm",
     "like a wire cut", "say my name, say it's okay", "come back home tonight",
+    # Stock hook families (template calibration)
+    "driving separate cars", "can we start again", "can we try again", "start fresh",
+    "walk back in", "waiting back home", "faces in the crowd", "no familiar sound",
+    "find my way back home", "trying to find my way back", "not the same from here",
+    "pillow still holds the shape", "empty instead", "feels empty instead",
 ]
 
 

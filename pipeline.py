@@ -283,9 +283,10 @@ def run_pipeline(
         chorus_an = analyze_chorus(lyrics, chorus_blacklist)
         chorus_bl_matches = chorus_an.get("generic_hook_flags", [])
         eval_notes = (eval_dict or {}).get("line_notes")
+        eval_issues = (eval_dict or {}).get("issues") or (eval_dict or {}).get("summary")
         ch_sc, chorus_debug = score_chorus_hook(
             chorus_an, chorus_bl_matches, score_cfg, evaluator_line_notes=eval_notes,
-            evaluator_score=ev_sc, is_pop_prompt=is_pop,
+            evaluator_score=ev_sc, is_pop_prompt=is_pop, evaluator_issues=eval_issues,
         )
         mus_an = analyze_musicality(lyrics)
         mus_sc = mus_an.get("musicality_score", 50.0)
@@ -294,8 +295,12 @@ def run_pipeline(
         )
         breakdown["chorus_score_penalties_applied"] = chorus_debug.get("penalties_applied", [])
         breakdown["chorus_lines_flagged_by_evaluator"] = chorus_debug.get("chorus_lines_flagged_by_evaluator", [])
+        breakdown["evaluator_fuzzy_chorus_matches"] = chorus_debug.get("evaluator_fuzzy_chorus_matches", [])
         breakdown["evaluator_chorus_penalty_applied"] = chorus_debug.get("evaluator_chorus_penalty_applied", False)
         breakdown["chorus_score_cap_reason"] = chorus_debug.get("chorus_score_cap_reason") or None
+        breakdown["chorus_penalty_reason_details"] = chorus_debug.get("chorus_penalty_reason_details", [])
+        breakdown["template_hook_flags"] = chorus_an.get("template_hook_flags") or []
+        breakdown["phrase_family_matches"] = chorus_an.get("phrase_family_matches") or []
         breakdown["fallback_block_selection_reason"] = chorus_an.get("fallback_block_selection_reason") or None
         breakdown["chorus_boundary_reason"] = chorus_an.get("chorus_boundary_reason") or None
         breakdown["unlabeled_verse_after_chorus_detected"] = chorus_an.get("unlabeled_verse_after_chorus_detected", False)

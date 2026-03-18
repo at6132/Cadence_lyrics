@@ -295,6 +295,82 @@ def _memorability_score(
     return max(0.0, min(100.0, score)), components
 
 
+# Phrase families: exact phrases that signal stock hooks (in addition to blacklist)
+CHORUS_PHRASE_FAMILY_EXACT = [
+    "driving separate cars", "same streets", "same old town", "same town", "same place",
+    "can we start again", "can we try again", "start fresh", "walk back in", "waiting back home",
+    "faces in the crowd", "no familiar sound", "find my way back home", "trying to find my way back",
+    "not the same from here", "where did we lose our way", "your side of the bed",
+    "pillow still holds", "still holds the shape", "empty instead", "feels empty instead",
+]
+# Pattern families: (regex_pattern, label) for stock structures. Case-insensitive.
+CHORUS_PHRASE_FAMILY_PATTERNS = [
+    (re.compile(r"same\s+\w+[,.]?\s*different", re.I), "template: same X, different Y"),
+    (re.compile(r"same\s+(streets|town|place|old)\b", re.I), "template: same streets/town/place"),
+    (re.compile(r"can we \w+ again", re.I), "template: can we [verb] again"),
+    (re.compile(r"\w+\s+still\s+(holds?|is|was)\b", re.I), "template: [noun] still [holds/is]"),
+    (re.compile(r"find my way back", re.I), "template: find my way back"),
+    (re.compile(r"trying to find my way", re.I), "template: trying to find my way back"),
+]
+
+
+def _match_phrase_families(chorus_lines: List[str]) -> Tuple[List[str], List[str]]:
+    """
+    Match chorus text against phrase families (exact + patterns).
+    Returns (phrase_family_matches, family_labels) for debug and scoring.
+    """
+    if not chorus_lines:
+        return [], []
+    text = " ".join(chorus_lines).lower()
+    matches: List[str] = []
+    labels: List[str] = []
+    for phrase in CHORUS_PHRASE_FAMILY_EXACT:
+        if phrase in text:
+            matches.append(phrase)
+    for pat, label in CHORUS_PHRASE_FAMILY_PATTERNS:
+        if pat.search(text) and label not in labels:
+            labels.append(label)
+    if matches and "template: phrase_family" not in labels:
+        labels.append("template: stock phrase family")
+    return list(dict.fromkeys(matches)), labels
+
+
+def _stock_hook_shape_flags(chorus_lines: List[str]) -> List[str]:
+    """
+    Lightweight heuristics for generic chorus shapes (singable but stock).
+    """
+    if not chorus_lines:
+        return []
+    text = " ".join(chorus_lines).lower()
+    flags: List[str] = []
+    # "we're X now" short repeated
+    for line in chorus_lines:
+        n = _normalize_line(line)
+        if re.match(r"^were \w+ now$", n) or re.match(r"^we're \w+ now$", n):
+            if len(line.split()) <= 5:
+                flags.append("template: we're X now")
+                break
+    # "can we [verb] again"
+    if re.search(r"can we \w+ again", text):
+        flags.append("template: can we [verb] again")
+    # "same streets / same town / same place"
+    if text.count("same ") >= 2 or ("same" in text and any(w in text for w in ("streets", "town", "place", "old"))):
+        flags.append("template: same streets/town/place")
+    # "without you" style emotional filler
+    if "without you" in text or "missing you" in text:
+        flags.append("template: without you style")
+    # "faces in the crowd / strangers / no familiar sound"
+    if any(w in text for w in ("faces in the crowd", "strangers now", "no familiar sound", "familiar sound")):
+        flags.append("template: faces in the crowd / strangers")
+    # "not the same / feels empty / not home"
+    if any(w in text for w in ("not the same", "feels empty", "not home", "empty instead")):
+        flags.append("template: not the same / feels empty")
+    # "find my way back"
+    if "find my way" in text or "find my way back" in text:
+        flags.append("template: find my way back")
+    return flags
+
+
 def _chorus_template_flags(chorus_lines: List[str]) -> List[str]:
     """
     Lightweight heuristics for familiar chorus templates (abstract emotion + city/night,
@@ -368,11 +444,15 @@ def analyze_chorus(
         for phrase in chorus_blacklist:
             if phrase.lower() in chorus_text:
                 generic_hook_flags.append(phrase)
-    # Lightweight template heuristics: familiar breakup/chorus patterns
+    # Template heuristics + phrase families + stock hook shapes
     template_flags = _chorus_template_flags(chorus_lines_flat)
-    generic_hook_flags = list(dict.fromkeys(generic_hook_flags + template_flags))
+    phrase_family_matches, family_labels = _match_phrase_families(chorus_lines_flat)
+    stock_shape_flags = _stock_hook_shape_flags(chorus_lines_flat)
+    template_hook_flags = list(dict.fromkeys(template_flags + family_labels + stock_shape_flags))
+    # Combined flags for memorability penalty (exact + templates)
+    all_generic_flags = list(dict.fromkeys(generic_hook_flags + template_hook_flags))
     memorability, memorability_components = _memorability_score(
-        chorus_lines_flat, hook_lines, generic_hook_flags
+        chorus_lines_flat, hook_lines, all_generic_flags
     )
     is_prose_like = _prose_like(chorus_lines_flat)
 
@@ -396,6 +476,8 @@ def analyze_chorus(
         "repeat_consistency_score": round(repeat_consistency, 1),
         "memorability_score": round(memorability, 1),
         "generic_hook_flags": generic_hook_flags,
+        "template_hook_flags": template_hook_flags,
+        "phrase_family_matches": phrase_family_matches,
         "is_prose_like": is_prose_like,
         "parsed_sections": parsed_sections,
         "detected_section_headers": detected_section_headers,

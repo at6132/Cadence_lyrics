@@ -40,6 +40,8 @@ DEFAULT_CONFIG = {
     "chorus_cap_when_evaluator_low_pop": 55.0,
     "evaluator_chorus_cliche_penalty": 12.0,
     "evaluator_low_bonus_multiplier": 0.4,
+    "chorus_cap_multiple_template": 55.0,
+    "penalty_per_template_hook_flag": 5,
 }
 
 
@@ -150,9 +152,51 @@ def _evaluator_cliche_keywords(problem_text: str) -> bool:
         for k in (
             "cliché", "cliche", "generic", "stock", "overused",
             "lacks specificity", "familiar trope", "generic sentiment",
-            "stock pop", "predictable",
+            "stock pop", "predictable", "repetitive chorus", "lacks originality",
         )
     )
+
+
+def _evaluator_chorus_level_issues(issues_text: str) -> bool:
+    """True if evaluator issues text likely refers to chorus (stock pop lyric, clichéd chorus, etc.)."""
+    t = (issues_text or "").lower()
+    return any(
+        k in t
+        for k in (
+            "stock pop lyric", "stock pop", "clichéd chorus", "cliche chorus",
+            "repetitive chorus", "generic sentiment", "lacks originality",
+            "familiar trope", "generic chorus",
+        )
+    )
+
+
+def _word_overlap_ratio(note_words: List[str], chorus_line_norm: str) -> float:
+    """Return share of note words that appear in chorus line (0-1)."""
+    if not note_words:
+        return 0.0
+    chorus_words = set(re.findall(r"\w+", chorus_line_norm))
+    return sum(1 for w in note_words if len(w) > 2 and w in chorus_words) / len(note_words)
+
+
+def _fuzzy_match_note_to_chorus(
+    note_line: str, chorus_lines: List[str], chorus_norm: Dict[str, str], min_overlap: float = 0.4
+) -> Optional[str]:
+    """
+    If note line matches a chorus line (exact norm, substring, or word overlap), return that chorus line.
+    """
+    norm = _normalize_line_for_match(note_line)
+    if not norm:
+        return None
+    if norm in chorus_norm:
+        return chorus_norm[norm]
+    for c_norm, c_orig in chorus_norm.items():
+        if norm in c_norm or c_norm in norm:
+            return c_orig
+    note_words = re.findall(r"\w+", norm)
+    for c_norm, c_orig in chorus_norm.items():
+        if _word_overlap_ratio(note_words, c_norm) >= min_overlap:
+            return c_orig
+    return None
 
 
 def chorus_hook_score(
@@ -162,21 +206,24 @@ def chorus_hook_score(
     evaluator_line_notes: Optional[List[Dict[str, Any]]] = None,
     evaluator_score: Optional[float] = None,
     is_pop_prompt: bool = False,
+    evaluator_issues: Optional[Any] = None,
 ) -> tuple:
     """
     Score 0–100 for chorus/hook quality. Short repeated cliché choruses are capped well below elite.
-    When evaluator_score is low, short/repetition bonuses are reduced and caps are stricter.
-    Returns (score, debug_dict). debug_dict includes: penalties_applied, chorus_lines_flagged_by_evaluator,
-    evaluator_chorus_penalty_applied, chorus_score_cap_reason, evaluator_low_score_cap_applied, evaluator_low_score_cap_value.
+    Uses generic_hook_flags + template_hook_flags for penalties/caps. Fuzzy-matches evaluator notes to chorus.
+    Returns (score, debug_dict) including chorus_penalty_reason_details, evaluator_fuzzy_chorus_matches.
     """
     cfg = {**DEFAULT_CONFIG, **(config or {})}
     penalties_applied: List[str] = []
+    penalty_reason_details: List[str] = []
     debug: Dict[str, Any] = {
         "chorus_lines_flagged_by_evaluator": [],
+        "evaluator_fuzzy_chorus_matches": [],
         "evaluator_chorus_penalty_applied": False,
         "chorus_score_cap_reason": "",
         "evaluator_low_score_cap_applied": False,
         "evaluator_low_score_cap_value": None,
+        "chorus_penalty_reason_details": [],
     }
     score = 45.0
     if not chorus_analysis.get("has_chorus"):
@@ -201,10 +248,18 @@ def chorus_hook_score(
         penalties_applied.append("evaluator_low_bonus_reduction")
 
     n_generic = len(chorus_blacklist_matches)
+    template_hook_flags = chorus_analysis.get("template_hook_flags") or []
+    n_template = len(template_hook_flags)
     if n_generic > 0:
         p = n_generic * cfg["penalty_per_chorus_blacklist_phrase"]
         score -= p
         penalties_applied.append(f"generic_hook_flags:{n_generic}")
+        penalty_reason_details.append("generic_hook_flags")
+    if n_template > 0:
+        p_template = n_template * cfg["penalty_per_template_hook_flag"]
+        score -= p_template
+        penalties_applied.append(f"template_hook_flags:{n_template}")
+        penalty_reason_details.append("stock_pop_hook_family")
     if chorus_analysis.get("is_prose_like"):
         score -= 15.0
         penalties_applied.append("prose_like_chorus")
@@ -212,31 +267,44 @@ def chorus_hook_score(
         score -= cfg["no_memorable_hook_penalty_pop"]
         penalties_applied.append("no_memorable_hook")
 
-    # Match evaluator line_notes to chorus lines; apply chorus-aware penalty (larger when cliché)
     chorus_lines = chorus_analysis.get("chorus_lines") or []
     chorus_norm = {_normalize_line_for_match(l): l for l in chorus_lines}
     flagged_lines: List[str] = []
+    fuzzy_matches: List[str] = []
     for note in (evaluator_line_notes or []):
         line_text = note.get("line") or note.get("text") or ""
         probs = note.get("problems") or []
         if not any(_evaluator_cliche_keywords(str(p)) for p in probs):
             continue
-        norm = _normalize_line_for_match(line_text)
-        if norm in chorus_norm:
-            flagged_lines.append(chorus_norm[norm])
-        else:
-            for c_norm, c_orig in chorus_norm.items():
-                if norm in c_norm or c_norm in norm:
-                    flagged_lines.append(c_orig)
-                    break
+        matched = _fuzzy_match_note_to_chorus(line_text, chorus_lines, chorus_norm)
+        if matched:
+            flagged_lines.append(matched)
+            snippet = (line_text.strip() or matched)[:60]
+            if snippet not in fuzzy_matches:
+                fuzzy_matches.append(snippet)
     if flagged_lines:
         flagged_lines = list(dict.fromkeys(flagged_lines))
         debug["chorus_lines_flagged_by_evaluator"] = flagged_lines
+        debug["evaluator_fuzzy_chorus_matches"] = fuzzy_matches
         debug["evaluator_chorus_penalty_applied"] = True
         score -= cfg["evaluator_chorus_cliche_penalty"]
         penalties_applied.append("evaluator_chorus_cliche")
+        penalty_reason_details.append("evaluator_fuzzy_chorus_cliche_match")
 
-    # Caps: evaluator-flagged cliché -> ~60; 1 generic -> 70; multiple -> 60; pop + low evaluator -> 55
+    issues_text = ""
+    if isinstance(evaluator_issues, str):
+        issues_text = evaluator_issues
+    elif isinstance(evaluator_issues, dict):
+        issues_text = (evaluator_issues.get("issues") or evaluator_issues.get("summary") or "").strip() or str(evaluator_issues.get("problems", ""))
+    if _evaluator_chorus_level_issues(issues_text):
+        if not debug["evaluator_chorus_penalty_applied"]:
+            score -= cfg["evaluator_chorus_cliche_penalty"]
+            penalties_applied.append("evaluator_chorus_level_criticism")
+        debug["evaluator_chorus_penalty_applied"] = True
+        penalty_reason_details.append("evaluator_chorus_level_criticism")
+
+    total_suspicious = n_generic + n_template
+    cap_55 = cfg["chorus_cap_multiple_template"]
     distinctiveness = (chorus_analysis.get("memorability_score_components") or {}).get("distinctiveness_bonus", 0)
     cap_70 = cfg["chorus_cap_one_generic"]
     cap_60 = cfg["chorus_cap_multiple_or_evaluator_cliche"]
@@ -247,15 +315,23 @@ def chorus_hook_score(
         debug["evaluator_low_score_cap_applied"] = True
         debug["evaluator_low_score_cap_value"] = cap_low_ev
         penalties_applied.append(debug["chorus_score_cap_reason"])
-    elif n_generic >= 2 or debug["evaluator_chorus_penalty_applied"]:
+    elif total_suspicious >= 2 or debug["evaluator_chorus_penalty_applied"]:
         score = min(score, cap_60)
-        debug["chorus_score_cap_reason"] = "generic_hook_flags_multiple_or_evaluator_cliche"
-    elif n_generic == 1:
+        if total_suspicious >= 2:
+            score = min(score, cap_55)
+            debug["chorus_score_cap_reason"] = "generic_and_template_multiple"
+        else:
+            debug["chorus_score_cap_reason"] = "generic_hook_flags_multiple_or_evaluator_cliche"
+    elif n_generic == 1 and n_template == 0:
         if distinctiveness >= 5.0:
             pass
         else:
             score = min(score, cap_70)
             debug["chorus_score_cap_reason"] = "generic_hook_flags_single"
+    elif n_template >= 1 or n_generic >= 1:
+        score = min(score, cap_55)
+        debug["chorus_score_cap_reason"] = "template_or_generic_single"
+    debug["chorus_penalty_reason_details"] = list(dict.fromkeys(penalty_reason_details))
     if debug["chorus_score_cap_reason"] and not debug["evaluator_low_score_cap_applied"]:
         penalties_applied.append(debug["chorus_score_cap_reason"])
     debug["penalties_applied"] = penalties_applied
@@ -300,7 +376,7 @@ def total_score_with_chorus_and_musicality(
     evaluator_low_cap_applied = False
     evaluator_low_cap_value = None
     if is_pop_prompt and evaluator_score is not None and evaluator_score <= 50:
-        has_generic_chorus = (chorus_analysis.get("generic_hook_flags") or [])
+        has_generic_chorus = (chorus_analysis.get("generic_hook_flags") or []) or (chorus_analysis.get("template_hook_flags") or [])
         if has_generic_chorus:
             cap = cfg["pop_prompt_low_evaluator_cap_with_generic_chorus"]
         else:
