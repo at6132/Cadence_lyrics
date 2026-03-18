@@ -283,7 +283,7 @@ def run_pipeline(
         chorus_an = analyze_chorus(lyrics, chorus_blacklist)
         chorus_bl_matches = chorus_an.get("generic_hook_flags", [])
         eval_notes = (eval_dict or {}).get("line_notes")
-        ch_sc, chorus_penalties = score_chorus_hook(
+        ch_sc, chorus_debug = score_chorus_hook(
             chorus_an, chorus_bl_matches, score_cfg, evaluator_line_notes=eval_notes
         )
         mus_an = analyze_musicality(lyrics)
@@ -291,7 +291,11 @@ def run_pipeline(
         total, breakdown = total_score_with_chorus_and_musicality(
             rule_sc, ev_sc, ch_sc, mus_sc, is_pop, chorus_an, score_cfg
         )
-        breakdown["chorus_score_penalties_applied"] = chorus_penalties
+        breakdown["chorus_score_penalties_applied"] = chorus_debug.get("penalties_applied", [])
+        breakdown["chorus_lines_flagged_by_evaluator"] = chorus_debug.get("chorus_lines_flagged_by_evaluator", [])
+        breakdown["evaluator_chorus_penalty_applied"] = chorus_debug.get("evaluator_chorus_penalty_applied", False)
+        breakdown["chorus_score_cap_reason"] = chorus_debug.get("chorus_score_cap_reason") or None
+        breakdown["fallback_block_selection_reason"] = chorus_an.get("fallback_block_selection_reason") or None
         return total, breakdown, chorus_an, mus_an
 
     # Step A: Draft (streamed)

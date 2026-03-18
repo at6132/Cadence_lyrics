@@ -83,21 +83,23 @@ def _get_sections(lyrics: str) -> List[tuple]:
     return sections
 
 
-def _find_repeated_refrains(all_lines: List[str], min_repeats: int = 2) -> Tuple[List[List[str]], List[dict]]:
+def _find_repeated_refrains(
+    all_lines: List[str], min_repeats: int = 2
+) -> Tuple[List[List[str]], List[dict], str]:
     """
     Find 1/2/3/4-line blocks that repeat at least min_repeats times (non-adjacent ok).
-    Ignores punctuation/case when comparing.
-    Returns (list of chorus section line lists, list of candidates with metadata for debug).
+    Prefer longer repeated blocks (2 or 3 lines) over a single repeated line when both exist.
+    Returns (chorus_sections, candidates, selection_reason).
     """
     if not all_lines:
-        return [], []
+        return [], [], ""
     lines = [l.strip() for l in all_lines if l.strip()]
     if len(lines) < 2:
-        return [], []
+        return [], [], ""
 
-    candidates: List[dict] = []  # {sig, lines, count, occurrences}
+    candidates: List[dict] = []
 
-    for block_len in range(1, 5):  # 1, 2, 3, 4 line blocks
+    for block_len in range(1, 5):
         if block_len > len(lines):
             break
         sig_to_lines: Dict[str, List[str]] = {}
@@ -113,36 +115,38 @@ def _find_repeated_refrains(all_lines: List[str], min_repeats: int = 2) -> Tuple
             if count >= min_repeats and sig in sig_to_lines:
                 candidates.append({
                     "sig": sig,
-                    "lines": sig_to_lines[sig],
+                    "lines": list(sig_to_lines[sig]),
                     "count": count,
                     "block_len": block_len,
                 })
     if not candidates:
-        return [], []
+        return [], [], ""
 
-    # Best: most repeats, then prefer shorter block, then longer total length (more content)
+    # Prefer: at least 2 repeats, then LONGER block (2 or 3 line over 1-line), then more repeats
     best = max(
         candidates,
-        key=lambda c: (c["count"], -c["block_len"], sum(len(l) for l in c["lines"])),
+        key=lambda c: (c["count"] >= 2, c["block_len"], c["count"]),
     )
-    # Return one representative block per occurrence (same content each time)
     block_lines = best["lines"]
-    return [list(block_lines) for _ in range(best["count"])], candidates
+    reason = (
+        f"preferred repeated {best['block_len']}-line block (count={best['count']}) over shorter alternatives"
+    )
+    return [list(block_lines) for _ in range(best["count"])], candidates, reason
 
 
 def _infer_chorus_sections(
     sections: List[tuple],
     all_lines_flat: Optional[List[str]] = None,
-) -> Tuple[List[List[str]], List[dict], List[List[str]]]:
+) -> Tuple[List[List[str]], List[dict], List[str], str]:
     """
-    Return (chorus_sections, fallback_candidates, chosen_fallback_refrain).
+    Return (chorus_sections, fallback_candidates, chosen_fallback_refrain, fallback_block_selection_reason).
     Use explicit Chorus/Hook labels as primary; fallback to repeated 1-4 line refrains when no labels.
+    Preserve full multi-line block as chosen_fallback_refrain; prefer 2/3-line blocks over 1-line.
     """
     explicit = [lines for stype, lines in sections if stype in ("chorus", "hook") and lines]
     if explicit:
-        return explicit, [], []
+        return explicit, [], [], ""
 
-    # No explicit labels: try section-level repeated blocks first (blank-line separated)
     blocks = [lines for _, lines in sections if len(lines) >= 1]
     block_sigs = ["\n".join(_normalize_line(l) for l in b) for b in blocks]
     counts = Counter(block_sigs)
@@ -151,20 +155,19 @@ def _infer_chorus_sections(
         for b in blocks:
             if "\n".join(_normalize_line(l) for l in b) == best_sig:
                 n = counts[best_sig]
-                return [b] * n, [{"block": b, "count": n}], b
+                reason = f"section-level repeated {len(b)}-line block (count={n})"
+                return [b] * n, [{"block": b, "count": n}], list(b), reason
 
-    # Scan full line list for repeated 1-4 line refrains (non-adjacent)
     flat = all_lines_flat or [l for _, lines in sections for l in lines]
-    chorus_sections, fallback_candidates = _find_repeated_refrains(flat, min_repeats=2)
+    chorus_sections, fallback_candidates, selection_reason = _find_repeated_refrains(flat, min_repeats=2)
     if chorus_sections:
-        chosen = chorus_sections[0] if chorus_sections else []
-        return chorus_sections, fallback_candidates, chosen
-    # Last resort: shortest block with 2-6 lines
+        chosen = list(chorus_sections[0])  # full block, not collapsed
+        return chorus_sections, fallback_candidates, chosen, selection_reason
     candidates = [b for b in blocks if 2 <= len(b) <= 8]
     if candidates:
         b = min(candidates, key=lambda x: (sum(len(l) for l in x), -len(x)))
-        return [b], [], b
-    return [], fallback_candidates, []
+        return [b], [], list(b), "last_resort_shortest_2_to_6_line_block"
+    return [], fallback_candidates, [], selection_reason or "no_repeated_block_found"
 
 
 def _hook_candidates(chorus_lines: List[str], all_lines: List[str]) -> List[str]:
@@ -247,6 +250,28 @@ def _memorability_score(
     return max(0.0, min(100.0, score)), components
 
 
+def _chorus_template_flags(chorus_lines: List[str]) -> List[str]:
+    """
+    Lightweight heuristics for familiar chorus templates (abstract emotion + city/night,
+    without you / missing you / alone tonight style). Case-insensitive.
+    """
+    if not chorus_lines:
+        return []
+    text = " ".join(chorus_lines).lower()
+    flags: List[str] = []
+    # Abstract emotional + city/streetlight/night image
+    if any(w in text for w in ("streetlight", "streetlights", "city at night", "city lights")):
+        if any(w in text for w in ("undone", "missing you", "without you", "alone", "falling", "breaking")):
+            flags.append("template: emotion + city/streetlight/night")
+    # Without you / missing you / alone tonight style
+    if ("without you" in text or "missing you" in text) and ("alone" in text or "tonight" in text):
+        flags.append("template: without you / missing you / alone tonight")
+    # Familiar breakup rhyme/emotion combos
+    if "losing the fight" in text or "can't escape" in text or "coming apart" in text:
+        flags.append("template: breakup/escape trope")
+    return flags
+
+
 def _prose_like(chorus_lines: List[str]) -> bool:
     """True if chorus reads like prose (long lines, sentence-like)."""
     if not chorus_lines:
@@ -266,7 +291,7 @@ def analyze_chorus(
     """
     sections, detected_section_headers = get_sections(lyrics)
     all_lines = [l for _, lines in sections for l in lines]
-    chorus_sections, fallback_refrain_candidates, chosen_fallback_refrain = _infer_chorus_sections(
+    chorus_sections, fallback_refrain_candidates, chosen_fallback_refrain, fallback_block_selection_reason = _infer_chorus_sections(
         sections, all_lines_flat=all_lines
     )
     has_explicit_chorus = any(
@@ -288,6 +313,9 @@ def analyze_chorus(
         for phrase in chorus_blacklist:
             if phrase.lower() in chorus_text:
                 generic_hook_flags.append(phrase)
+    # Lightweight template heuristics: familiar breakup/chorus patterns
+    template_flags = _chorus_template_flags(chorus_lines_flat)
+    generic_hook_flags = list(dict.fromkeys(generic_hook_flags + template_flags))
     memorability, memorability_components = _memorability_score(
         chorus_lines_flat, hook_lines, generic_hook_flags
     )
@@ -319,5 +347,6 @@ def analyze_chorus(
         "chorus_source": chorus_source,
         "fallback_refrain_candidates": fallback_candidates_debug,
         "chosen_fallback_refrain": chosen_fallback_refrain if chorus_source == "fallback_repeated_blocks" else [],
+        "fallback_block_selection_reason": fallback_block_selection_reason if chorus_source == "fallback_repeated_blocks" else "",
         "memorability_score_components": memorability_components,
     }

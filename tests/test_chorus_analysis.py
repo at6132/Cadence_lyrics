@@ -15,6 +15,7 @@ from utils.chorus_analysis import (
     analyze_chorus,
     _get_sections,
     _infer_chorus_sections,
+    _find_repeated_refrains,
 )
 
 
@@ -188,7 +189,7 @@ def test_fallback_when_no_labels():
     sections, headers = get_sections(EXAMPLE_NO_LABELS)
     assert headers == []
     assert len(sections) == 2  # two blocks
-    chorus_sections, _, _ = _infer_chorus_sections(sections)
+    chorus_sections, _, _chosen, _reason = _infer_chorus_sections(sections)
     # Repeated block should be inferred as chorus
     assert len(chorus_sections) >= 1
     out = analyze_chorus(EXAMPLE_NO_LABELS)
@@ -239,6 +240,76 @@ dont go away
     out = analyze_chorus(lyrics)
     assert out["has_chorus"] is True
     assert out["chorus_source"] == "fallback_repeated_blocks"
+    # Full 2-line block should be chosen, not collapsed to one line
+    assert len(out.get("chosen_fallback_refrain", [])) == 2
+    assert "fallback_block_selection_reason" in out
+
+
+def test_fallback_prefer_2line_block_over_single_line():
+    # Same line repeated 4 times vs 2-line block repeated 2 times: prefer 2-line block
+    lines = [
+        "Verse here",
+        "We're undone",
+        "Like a wire cut",
+        "Verse there",
+        "We're undone",
+        "Like a wire cut",
+        "Bridge",
+        "We're undone",
+        "Like a wire cut",
+    ]
+    sections, candidates, reason = _find_repeated_refrains(lines, min_repeats=2)
+    assert sections
+    # Best should be the 2-line block "We're undone" / "Like a wire cut" (repeats 3 times)
+    assert len(sections[0]) == 2
+    assert "We're undone" in sections[0][0] or "undone" in sections[0][0].lower()
+    assert "wire" in sections[0][1].lower() or "wire" in sections[0][0].lower()
+    assert "preferred repeated 2-line" in reason or "2-line" in reason
+
+
+def test_fallback_3line_chorus_chosen():
+    lyrics = """Intro line
+
+Hook one
+Hook two
+Hook three
+
+Verse
+Hook one
+Hook two
+Hook three
+
+Outro
+Hook one
+Hook two
+Hook three
+"""
+    out = analyze_chorus(lyrics)
+    assert out["has_chorus"] is True
+    assert out["chorus_source"] == "fallback_repeated_blocks"
+    assert len(out["chorus_lines"]) == 3
+    assert out["chorus_lines"] == ["Hook one", "Hook two", "Hook three"]
+    assert len(out.get("chosen_fallback_refrain", [])) == 3
+    assert "3-line" in out.get("fallback_block_selection_reason", "") or "repeated" in out.get("fallback_block_selection_reason", "")
+
+
+def test_fallback_full_block_punctuation_case():
+    # Full 2-line block with punctuation/case variants still matches as one block
+    lyrics = """A
+B
+Oh we're undone
+Like a wire cut the signals gone
+
+C
+D
+Oh, we're undone
+Like a wire cut, the signal's gone
+"""
+    sections, _, reason = _find_repeated_refrains(lyrics.splitlines(), min_repeats=2)
+    assert sections
+    assert len(sections[0]) >= 2
+    assert "undone" in sections[0][0].lower()
+    assert "wire" in sections[0][1].lower() or "signal" in sections[0][1].lower()
 
 
 # --- Back-compat _get_sections ---

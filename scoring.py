@@ -33,7 +33,16 @@ DEFAULT_CONFIG = {
     "no_chorus_penalty_pop": 25.0,
     "no_memorable_hook_penalty_pop": 15.0,
     "penalty_per_chorus_blacklist_phrase": 6,
+    "chorus_cap_one_generic": 70.0,
+    "chorus_cap_multiple_or_evaluator_cliche": 60.0,
+    "pop_prompt_low_evaluator_cap": 65.0,
+    "evaluator_chorus_cliche_penalty": 12.0,
 }
+
+
+def _normalize_line_for_match(line: str) -> str:
+    """Normalize line text for matching evaluator notes to chorus lines."""
+    return re.sub(r"[^\w\s]", "", (line or "").strip().lower())
 
 
 def _count_repeated_ngrams(text: str, n: int = 2) -> int:
@@ -130,6 +139,19 @@ def passed_threshold(score: float, config: Optional[dict] = None) -> bool:
     return score >= cfg["pass_threshold"]
 
 
+def _evaluator_cliche_keywords(problem_text: str) -> bool:
+    """True if problem text indicates cliché/stock/generic/lacks specificity/familiar trope."""
+    t = (problem_text or "").lower()
+    return any(
+        k in t
+        for k in (
+            "cliché", "cliche", "generic", "stock", "overused",
+            "lacks specificity", "familiar trope", "generic sentiment",
+            "stock pop", "predictable",
+        )
+    )
+
+
 def chorus_hook_score(
     chorus_analysis: Dict[str, Any],
     chorus_blacklist_matches: List[str],
@@ -137,17 +159,24 @@ def chorus_hook_score(
     evaluator_line_notes: Optional[List[Dict[str, Any]]] = None,
 ) -> tuple:
     """
-    Score 0–100 for chorus/hook quality. Cliché/generic choruses cannot reach elite scores.
-    Returns (score, penalties_applied_list) for debug.
+    Score 0–100 for chorus/hook quality. Short repeated cliché choruses are capped well below elite.
+    Returns (score, debug_dict). debug_dict includes: penalties_applied, chorus_lines_flagged_by_evaluator,
+    evaluator_chorus_penalty_applied, chorus_score_cap_reason.
     """
     cfg = {**DEFAULT_CONFIG, **(config or {})}
     penalties_applied: List[str] = []
+    debug: Dict[str, Any] = {
+        "chorus_lines_flagged_by_evaluator": [],
+        "evaluator_chorus_penalty_applied": False,
+        "chorus_score_cap_reason": "",
+    }
     score = 45.0
     if not chorus_analysis.get("has_chorus"):
-        return max(0.0, score - 25.0), ["no_chorus"]
+        debug["penalties_applied"] = ["no_chorus"]
+        return max(0.0, score - 25.0), debug
     score += 15.0
     mem = chorus_analysis.get("memorability_score", 0)
-    score += mem * 0.15  # memorability helps but is capped by generic_phrase_penalty inside memorability
+    score += mem * 0.15
     score += chorus_analysis.get("repeat_consistency_score", 0) * 0.08
     avg_len = chorus_analysis.get("avg_chorus_line_length", 99)
     if avg_len > 0 and avg_len <= 7:
@@ -156,7 +185,6 @@ def chorus_hook_score(
         score += 4.0
     if chorus_analysis.get("hook_lines"):
         score += 6.0
-    # Strong penalty for generic/cliché phrases in chorus
     n_generic = len(chorus_blacklist_matches)
     if n_generic > 0:
         p = n_generic * cfg["penalty_per_chorus_blacklist_phrase"]
@@ -168,22 +196,49 @@ def chorus_hook_score(
     if not chorus_analysis.get("hook_lines") and chorus_analysis.get("has_chorus"):
         score -= cfg["no_memorable_hook_penalty_pop"]
         penalties_applied.append("no_memorable_hook")
-    # Evaluator line notes: if any line in chorus is flagged as cliché, penalize
-    if evaluator_line_notes:
-        for note in evaluator_line_notes:
-            probs = note.get("problems") or []
-            if any("cliché" in str(p).lower() or "cliche" in str(p).lower() or "generic" in str(p).lower() for p in probs):
-                score -= 8.0
-                penalties_applied.append("evaluator_cliche_note")
-                break
-    # Cap: chorus with any generic flags cannot exceed 78 unless strong distinctiveness
-    if n_generic > 0:
-        distinctiveness = (chorus_analysis.get("memorability_score_components") or {}).get("distinctiveness_bonus", 0)
-        if distinctiveness < 5.0:
-            score = min(score, 78.0)
-            if score >= 76:
-                penalties_applied.append("capped_due_to_generic_phrases")
-    return max(0.0, min(100.0, score)), penalties_applied
+
+    # Match evaluator line_notes to chorus lines; apply chorus-aware penalty
+    chorus_lines = chorus_analysis.get("chorus_lines") or []
+    chorus_norm = {_normalize_line_for_match(l): l for l in chorus_lines}
+    flagged_lines: List[str] = []
+    for note in (evaluator_line_notes or []):
+        line_text = note.get("line") or note.get("text") or ""
+        probs = note.get("problems") or []
+        if not any(_evaluator_cliche_keywords(str(p)) for p in probs):
+            continue
+        norm = _normalize_line_for_match(line_text)
+        if norm in chorus_norm:
+            flagged_lines.append(chorus_norm[norm])
+        else:
+            # Fuzzy: check if note line is substring of any chorus line or vice versa
+            for c_norm, c_orig in chorus_norm.items():
+                if norm in c_norm or c_norm in norm:
+                    flagged_lines.append(c_orig)
+                    break
+    if flagged_lines:
+        flagged_lines = list(dict.fromkeys(flagged_lines))
+        debug["chorus_lines_flagged_by_evaluator"] = flagged_lines
+        debug["evaluator_chorus_penalty_applied"] = True
+        score -= cfg["evaluator_chorus_cliche_penalty"]
+        penalties_applied.append("evaluator_chorus_cliche")
+
+    # Stronger caps: 1 generic -> cap 70; multiple or evaluator cliché -> cap 60
+    distinctiveness = (chorus_analysis.get("memorability_score_components") or {}).get("distinctiveness_bonus", 0)
+    cap_70 = cfg["chorus_cap_one_generic"]
+    cap_60 = cfg["chorus_cap_multiple_or_evaluator_cliche"]
+    if n_generic >= 2 or debug["evaluator_chorus_penalty_applied"]:
+        score = min(score, cap_60)
+        debug["chorus_score_cap_reason"] = "generic_hook_flags_multiple_or_evaluator_cliche"
+    elif n_generic == 1:
+        if distinctiveness >= 5.0:
+            pass  # allow slightly higher
+        else:
+            score = min(score, cap_70)
+            debug["chorus_score_cap_reason"] = "generic_hook_flags_single"
+    if debug["chorus_score_cap_reason"]:
+        penalties_applied.append(debug["chorus_score_cap_reason"])
+    debug["penalties_applied"] = penalties_applied
+    return max(0.0, min(100.0, score)), debug
 
 
 def total_score_with_chorus_and_musicality(
@@ -197,8 +252,8 @@ def total_score_with_chorus_and_musicality(
 ) -> tuple:
     """
     Returns (total_score, breakdown_dict).
-    breakdown_dict has: realism_score, evaluator_score, chorus_hook_score, musicality_score, total_score.
-    For pop prompts, applies no-chorus penalty and uses pop weights.
+    breakdown_dict includes: realism_score, evaluator_score, chorus_hook_score, musicality_score,
+    total_score, final_score_cap_reason (when pop + low evaluator).
     """
     cfg = {**DEFAULT_CONFIG, **(config or {})}
     ev = evaluator_score if evaluator_score is not None else realism_score
@@ -220,12 +275,19 @@ def total_score_with_chorus_and_musicality(
         mw = cfg["musicality_weight"]
         total = rw * realism_score + ew * ev + cw * chorus_hook_score_val + mw * musicality_score_val
     total = max(0.0, min(100.0, total))
+    final_score_cap_reason = ""
+    if is_pop_prompt and evaluator_score is not None and evaluator_score <= 50:
+        cap = cfg["pop_prompt_low_evaluator_cap"]
+        if total > cap:
+            total = cap
+            final_score_cap_reason = "pop_prompt_low_evaluator_cap"
     breakdown = {
         "realism_score": round(realism_score, 1),
         "evaluator_score": round(ev, 1) if ev is not None else None,
         "chorus_hook_score": round(chorus_hook_score_val, 1),
         "musicality_score": round(musicality_score_val, 1),
         "total_score": round(total, 1),
+        "final_score_cap_reason": final_score_cap_reason or None,
     }
     return total, breakdown
 

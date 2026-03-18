@@ -47,6 +47,11 @@ DEFAULT_CHORUS_PHRASES = [
     "wide awake missing you", "we're undone", "coming apart", "fraying at the edges",
     "can't take back what's been said", "without you", "city's still the same",
     "everything's off without you",
+    # Expanded calibration: short repeated cliché choruses
+    "driving home", "city at night", "losing the fight", "can't escape", "your memory stays",
+    "missing you under these streetlights", "alone in the dark", "every mile feels like a mistake",
+    "wrong turn", "ghost in my head", "city lights blurring by", "still the same",
+    "just two people in a crowded room", "out of sync", "out of place",
 ]
 
 
