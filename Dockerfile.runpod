@@ -12,21 +12,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Python deps (use requirements-runpod which includes runpod + base requirements)
+# Install Python deps (long timeout for large wheels: torch, nvidia-*)
 COPY requirements.txt requirements-runpod.txt ./
-RUN pip install --no-cache-dir -r requirements-runpod.txt
+RUN pip install --no-cache-dir --timeout 600 --retries 5 -r requirements-runpod.txt
 
 # Copy full app (prompts, pipeline, generate, config, utils, data)
 COPY config.py generate.py pipeline.py prompts.py phrase_blacklist.py scoring.py runpod_handler.py ./
 COPY utils ./utils
 COPY data ./data
-# Include your trained LoRA adapter: ensure Lyric_model/adapters/lyric-human/ exists before building
-COPY adapters ./adapters
+# Adapter is NOT copied (too large for GitHub). At runtime set:
+#   LYRIC_ADAPTER_REPO=your_hf_username/your-adapter-repo
+#   HUGGING_FACE_HUB_TOKEN=hf_...  (for private repos)
+# The handler downloads the adapter on first cold start. For local Docker with adapters on disk, add:
+#   COPY adapters ./adapters
+RUN mkdir -p /app/adapters/lyric-human
 
-# Optional: set Hugging Face token at runtime via RunPod env
-ENV HUGGING_FACE_HUB_TOKEN=""
-# Optional: use 4xA100 preset for larger model (e.g. 70B)
-# ENV LYRIC_DEVICE=4xa100
+# HUGGING_FACE_HUB_TOKEN + LYRIC_ADAPTER_REPO: set in RunPod endpoint env.
+# LYRIC_DEVICE=4xa100 for 70B preset.
 
 # RunPod serverless runs the handler; it will load the model on first request
 CMD ["python", "-u", "runpod_handler.py"]

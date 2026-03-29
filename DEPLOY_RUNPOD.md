@@ -4,25 +4,40 @@ Run the full lyric pipeline (draft → evaluate → rewrite → score) as a serv
 
 ## Prerequisites
 
-- Trained LoRA adapter in `Lyric_model/adapters/lyric-human/` (from finetune).
-- Docker (for building the image).
+- Trained LoRA adapter (see **Adapter too big for GitHub?** below).
+- Docker **or** RunPod **GitHub integration** (build in the cloud).
 - RunPod account and serverless endpoint set up.
+
+## Adapter too big for GitHub?
+
+The Docker image **does not** bake in `adapters/` anymore. Host the LoRA on **Hugging Face** and pull it at container startup.
+
+1. Create a **new model repo** on [huggingface.co](https://huggingface.co/new) (e.g. `yourname/lyric-human-lora`). It can be **private**.
+2. Upload **everything** inside your local `adapters/lyric-human/` folder (`adapter_config.json`, adapter weights, tokenizer files if any — same layout as the folder).
+3. On your RunPod serverless endpoint, set **environment variables**:
+   - `LYRIC_ADAPTER_REPO` = `yourname/lyric-human-lora` (the HF repo id)
+   - `HUGGING_FACE_HUB_TOKEN` = a token with **read** access (Settings → Access Tokens on HF)
+
+The worker downloads the adapter into `/app/adapters/lyric-human` on first cold start (before loading the base model). No huge files in GitHub.
+
+**Local Docker with adapter on disk:** add this line to `Dockerfile.runpod` before `RUN mkdir` (or after), then build:
+
+```dockerfile
+COPY adapters ./adapters
+```
+
+and remove or comment out `RUN mkdir -p /app/adapters/lyric-human` if you prefer a full copy.
 
 ## Build the image
 
-From the **Lyric_model** directory (so `adapters/` is in context):
+From the **Lyric_model** directory (no `adapters/` required for cloud/GitHub build):
 
 ```bash
 cd Lyric_model
 docker build -f Dockerfile.runpod -t your-registry/lyric-pipeline:latest .
 ```
 
-If your adapter is elsewhere, copy it in first:
-
-```bash
-cp -r /path/to/lyric-human adapters/
-docker build -f Dockerfile.runpod -t your-registry/lyric-pipeline:latest .
-```
+**RunPod GitHub:** connect your repo, set Dockerfile path to `Lyric_model/Dockerfile.runpod` (or move Dockerfile to root). Push code **without** the adapter folder; set `LYRIC_ADAPTER_REPO` + `HUGGING_FACE_HUB_TOKEN` on the endpoint.
 
 Push to a registry RunPod can pull from (Docker Hub, GHCR, etc.):
 

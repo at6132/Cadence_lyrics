@@ -24,8 +24,33 @@ APP_DIR = Path(__file__).resolve().parent
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
+def _ensure_adapter_from_hub() -> None:
+    """
+    If LYRIC_ADAPTER_REPO (or HF_ADAPTER_REPO) is set, download the LoRA adapter from Hugging Face
+    into adapters/lyric-human. Use this when the adapter is too large for GitHub/Docker context.
+
+    Upload your adapter folder to a HF model repo (e.g. Private), then set:
+      LYRIC_ADAPTER_REPO=yourusername/your-adapter-repo
+      HUGGING_FACE_HUB_TOKEN=hf_...   (read access for private repos)
+    """
+    repo_id = (os.environ.get("LYRIC_ADAPTER_REPO") or os.environ.get("HF_ADAPTER_REPO") or "").strip()
+    if not repo_id:
+        return
+    from config import ADAPTERS_DIR, ADAPTER_NAME
+
+    dest = ADAPTERS_DIR / ADAPTER_NAME
+    dest.mkdir(parents=True, exist_ok=True)
+    if (dest / "adapter_config.json").exists():
+        return
+    from huggingface_hub import snapshot_download
+
+    token = os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    snapshot_download(repo_id=repo_id, local_dir=str(dest), token=token)
+
+
 # Load model once at worker startup (before runpod.serverless.start)
 def _load_model():
+    _ensure_adapter_from_hub()
     from generate import load_model_and_tokenizer
     load_model_and_tokenizer()
 
