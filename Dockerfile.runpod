@@ -8,16 +8,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.10 \
     python3-pip \
     python3.10-venv \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python3
 
 WORKDIR /app
 
 # Install Python deps (long timeout for large wheels: torch, nvidia-*)
 COPY requirements.txt requirements-runpod.txt ./
-RUN pip install --no-cache-dir --timeout 600 --retries 5 -r requirements-runpod.txt
+RUN python3 -m pip install --no-cache-dir --timeout 600 --retries 5 -r requirements-runpod.txt
 
 # Copy full app (prompts, pipeline, generate, config, utils, data)
-COPY config.py generate.py pipeline.py prompts.py phrase_blacklist.py scoring.py runpod_handler.py ./
+COPY config.py generate.py pipeline.py prompts.py phrase_blacklist.py scoring.py runpod_handler.py handler.py ./
 COPY utils ./utils
 COPY data ./data
 # Adapter is NOT copied (too large for GitHub). At runtime set:
@@ -31,4 +33,4 @@ RUN mkdir -p /app/adapters/lyric-human
 # LYRIC_DEVICE=4xa100 for 70B preset.
 
 # RunPod serverless runs the handler; it will load the model on first request
-CMD ["python", "-u", "runpod_handler.py"]
+CMD ["python", "-u", "handler.py"]

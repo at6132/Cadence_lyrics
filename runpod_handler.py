@@ -84,7 +84,8 @@ def handler(job):
 
 
 if __name__ == "__main__":
+    # Local / tests: same as handler.py entrypoint
     import runpod
-    # Load model before starting the server so first request is fast
+
     _load_model()
     runpod.serverless.start({"handler": handler})
