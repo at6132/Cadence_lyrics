@@ -58,8 +58,11 @@ def load_model_and_tokenizer():
         )
 
     base_model_id = _get_base_model_id(adapter_path)
+    # Load tokenizer from base repo: LoRA folders often lack full fast-tokenizer files;
+    # base model has tokenizer.json + correct chat template for Llama 3.3 Instruct.
     _tokenizer = AutoTokenizer.from_pretrained(
-        str(adapter_path),
+        base_model_id,
+        token=HF_TOKEN,
         trust_remote_code=True,
     )
     if _tokenizer.pad_token is None:

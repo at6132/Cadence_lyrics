@@ -56,12 +56,12 @@ def load_model_and_tokenizer(use_hub: bool = False):
             print("Local adapter not found; loading from Hugging Face: %s" % ADAPTER_HF_ID)
         if not HF_TOKEN:
             raise SystemExit("Set HUGGING_FACE_HUB_TOKEN to load adapter from Hub.")
+        base_model_id = "unsloth/Llama-3.3-70B-Instruct-bnb-4bit"
         _tokenizer = AutoTokenizer.from_pretrained(
-            ADAPTER_HF_ID,
+            base_model_id,
             token=HF_TOKEN,
             trust_remote_code=True,
         )
-        base_model_id = "unsloth/Llama-3.3-70B-Instruct-bnb-4bit"
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_compute_dtype=torch.bfloat16,
@@ -82,7 +82,8 @@ def load_model_and_tokenizer(use_hub: bool = False):
         print("Using local adapter: %s" % adapter_path.resolve())
         base_model_id = _get_base_model_id(adapter_path)
         _tokenizer = AutoTokenizer.from_pretrained(
-            str(adapter_path),
+            base_model_id,
+            token=HF_TOKEN,
             trust_remote_code=True,
         )
         if _tokenizer.pad_token is None:

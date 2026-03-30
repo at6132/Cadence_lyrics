@@ -13,8 +13,9 @@ datasets>=2.18.0
 trl>=0.12.0
 scipy
 
-# Tokenization
+# Tokenization (Llama 3.x fast tokenizers need sentencepiece and/or tiktoken)
 sentencepiece
+tiktoken>=0.5.0
 protobuf
 
 # 4xA100 server: Flash Attention 2 (2x faster for 70B)
