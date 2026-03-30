@@ -17,6 +17,9 @@ from __future__ import annotations
 
 import os
 import sys
+
+# If this module is imported before handler.py (e.g. tests), keep Xet off by default.
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 from pathlib import Path
 
 # RunPod worker runs from /app; ensure Lyric_model is on path
